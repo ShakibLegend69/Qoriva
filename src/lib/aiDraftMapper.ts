@@ -1,5 +1,7 @@
 import type {
+  AiAutoPostConfig,
   AiDraftLocalePayload,
+  AiSeoOptimizationResult,
   Article,
   CategorySlug,
   ContentBlock,
@@ -105,8 +107,17 @@ export function mapAiDraftToArticle(params: {
   subcategorySlug: string;
   authorId: string;
   groundedSources: SourceReference[];
+  publishImmediately?: boolean;
 }): Article {
-  const { draft, translationGroupId, categoryId, subcategorySlug, authorId, groundedSources } = params;
+  const {
+    draft,
+    translationGroupId,
+    categoryId,
+    subcategorySlug,
+    authorId,
+    groundedSources,
+    publishImmediately = false,
+  } = params;
   const ts = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const cleanSlug = slugifyTitle(
     draft.slug || draft.title,
@@ -215,8 +226,7 @@ export function mapAiDraftToArticle(params: {
           : 'AI-assisted grounded research draft queued for human editorial review.',
     },
     authorId,
-    // CRITICAL INVARIANT: AI drafts NEVER auto-publish; they always require human review
-    status: 'pending_review',
+    status: publishImmediately ? 'published' : 'pending_review',
     revisionNotes,
     isFeatured: false,
     isRecommended: false,
@@ -232,3 +242,63 @@ export function mapAiDraftToArticle(params: {
     updatedAt: nowIso,
   };
 }
+
+export const DEFAULT_AI_AUTO_POST_CONFIG: AiAutoPostConfig = {
+  enabled: false,
+  autoPublish: true,
+  dailyCount: 2,
+  localeTargets: ['en', 'bn'],
+  lastRunDate: '',
+  lastRunSummary: '',
+};
+
+export function getTodayUtcDateKey(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+export function shouldRunDailyAutoPost(
+  config: AiAutoPostConfig,
+  todayDateKey: string = getTodayUtcDateKey()
+): boolean {
+  if (!config.enabled) return false;
+  if (!Array.isArray(config.localeTargets) || config.localeTargets.length === 0) return false;
+  return config.lastRunDate.trim() !== todayDateKey;
+}
+
+export function sanitizeSeoOptimizationPayload(
+  raw: Partial<AiSeoOptimizationResult>,
+  existing: Pick<Article, 'articleId' | 'locale' | 'slug' | 'title' | 'excerpt' | 'tags' | 'featuredImage' | 'seo'>
+): AiSeoOptimizationResult {
+  const cleanTitle = (raw.metaTitle || existing.seo?.metaTitle || `${existing.title} | QORVIA`)
+    .trim()
+    .slice(0, 180);
+  const cleanDescription = (
+    raw.metaDescription ||
+    existing.seo?.metaDescription ||
+    existing.excerpt ||
+    existing.title
+  )
+    .trim()
+    .slice(0, 320);
+  const cleanTags = Array.isArray(raw.tags)
+    ? raw.tags
+        .map((t) => String(t).trim().slice(0, 60))
+        .filter(Boolean)
+        .slice(0, 15)
+    : existing.tags.slice(0, 15);
+  const cleanAlt = (raw.imageAlt || existing.featuredImage?.alt || existing.title)
+    .trim()
+    .slice(0, 300);
+
+  return {
+    articleId: existing.articleId,
+    metaTitle: cleanTitle.length >= 3 ? cleanTitle : `${existing.title} | QORVIA`.slice(0, 180),
+    metaDescription:
+      cleanDescription.length >= 10
+        ? cleanDescription
+        : `${existing.title} — Explained on QORVIA.`.slice(0, 320),
+    tags: cleanTags.length > 0 ? cleanTags : existing.tags.slice(0, 15),
+    imageAlt: cleanAlt || existing.title.slice(0, 300),
+  };
+}
+

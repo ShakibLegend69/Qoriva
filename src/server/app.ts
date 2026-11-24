@@ -8,7 +8,12 @@ import defaultFirebaseConfig from '../../firebase-applet-config.json';
 import { SEED_ARTICLES, SEED_AUTHORS, SEED_CATEGORIES } from '../data/seedCatalog';
 import { buildRobotsTxt, buildSitemapXml } from '../lib/seo';
 import { EngagementStore, type RuntimeInsightsSnapshot } from '../lib/engagementStore';
-import type { Article, CategorySlug, Locale } from '../types/qorvia';
+import {
+  mapAiDraftToArticle,
+  sanitizeGroundedSources,
+  sanitizeSeoOptimizationPayload,
+} from '../lib/aiDraftMapper';
+import type { AiDraftLocalePayload, Article, CategorySlug, Locale } from '../types/qorvia';
 
 const MODEL_ID = 'gemini-4-hydrogen';
 const BOOTSTRAPPED_SUPER_ADMIN_EMAIL = 'sbgangster016@gmail.com';
@@ -552,8 +557,9 @@ export function createQorviaApiApp(): Express {
                   .join('\n')}`
               : `No external search sources returned; set verificationFlag to true and note which facts require human citation.`,
             `Requirements:`,
-            `- Produce 3 to 4 structured sections with clear headings and thorough, non-fluff paragraphs.`,
-            `- Produce an ASCII lowercase hyphenated URL slug (^[a-z0-9-]+$) even for Bengali articles (e.g. 'grounded-ai-retrieval-bn').`,
+            `- Produce 3 to 4 structured sections with clear H2 headings containing natural high-intent search keywords and thorough, non-fluff paragraphs.`,
+            `- Produce an SEO-friendly ASCII lowercase hyphenated URL slug (^[a-z0-9-]+$) even for Bengali articles (e.g. 'grounded-ai-retrieval-bn').`,
+            `- Generate an optimized metaTitle (50–65 chars, ending with ' | QORVIA' if space permits), compelling metaDescription (135–160 chars), and 4–6 semantic SEO tags.`,
             `- Never invent citations, dates, or statistics not supported in the research brief; if evidence is missing or uncertain, set verificationFlag=true and list exact checks in verificationNotes.`,
           ].join('\n\n');
 
@@ -643,6 +649,400 @@ export function createQorviaApiApp(): Express {
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'AI draft generation failed.';
+        res.status(502).json({ error: msg });
+      }
+    }
+  );
+
+  app.post(
+    '/api/ai/discover-top-search',
+    verifyStaffAuthorization,
+    async (req: Request, res: Response) => {
+      try {
+        const ai = getAiClient();
+        const { count = 2, existingTitles = [], preferredCategory } = (req.body ?? {}) as {
+          count?: number;
+          existingTitles?: string[];
+          preferredCategory?: string;
+        };
+
+        const safeCount = Math.max(1, Math.min(4, Number(count) || 2));
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const avoidList = Array.isArray(existingTitles)
+          ? existingTitles.slice(0, 40).map((t) => String(t).slice(0, 140))
+          : [];
+        const catFilter = preferredCategory ? String(preferredCategory).slice(0, 64) : '';
+
+        const trendSearchPrompt = [
+          `Today is ${todayStr}. Use Google Search to identify today's top-searched, high-interest, evergreen-useful knowledge topics across technology & AI, education & learning, digital skills, and general science/knowledge.`,
+          catFilter ? `Prioritize department: ${catFilter}.` : '',
+          avoidList.length > 0
+            ? `Avoid repeating or duplicating these existing publication titles:\n- ${avoidList.join('\n- ')}`
+            : '',
+          `Summarize the top ${safeCount + 2} trending search topics with concrete factual context explaining why people are searching for them right now.`,
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+
+        const trendRes = await ai.models.generateContent({
+          model: MODEL_ID,
+          contents: trendSearchPrompt,
+          config: {
+            tools: [{ googleSearch: {} }],
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          },
+        });
+
+        const trendBrief = (trendRes.text || '').trim().slice(0, 6000);
+        const extractPrompt = [
+          `From the trending search brief below, select the best ${safeCount} non-duplicate article topics for QORVIA.`,
+          `Allowed categoryId values: "technology", "education", "digital-skills", "general-knowledge".`,
+          `Subcategory hints:`,
+          `- technology: "artificial-intelligence", "software-and-applications", "internet-technology", "cybersecurity-education"`,
+          `- education: "study-methods", "student-guides", "research-skills", "online-learning"`,
+          `- digital-skills: "web-development", "productivity-tools", "data-and-analytics", "creator-economy"`,
+          `- general-knowledge: "science-explainers", "world-systems", "history-and-culture", "health-literacy"`,
+          `Trending brief:\n${trendBrief}`,
+        ].join('\n\n');
+
+        const structuredRes = await ai.models.generateContent({
+          model: MODEL_ID,
+          contents: extractPrompt,
+          config: {
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING, description: 'SEO-strong editorial headline (max 140 chars).' },
+                  categoryId: { type: Type.STRING, description: 'One of technology, education, digital-skills, general-knowledge.' },
+                  subcategorySlug: { type: Type.STRING },
+                  searchQuery: { type: Type.STRING, description: 'Primary top search query keyword.' },
+                  rationale: { type: Type.STRING },
+                  priority: { type: Type.INTEGER },
+                },
+                required: ['title', 'categoryId', 'subcategorySlug', 'searchQuery', 'rationale', 'priority'],
+              },
+            },
+          },
+        });
+
+        const allowedCats: CategorySlug[] = [
+          'technology',
+          'education',
+          'digital-skills',
+          'general-knowledge',
+        ];
+        const rawList = JSON.parse((structuredRes.text || '[]').trim());
+        const topics = (Array.isArray(rawList) ? rawList : [])
+          .slice(0, safeCount)
+          .map((item) => {
+            const catRaw = String(item?.categoryId || 'technology') as CategorySlug;
+            const categoryId: CategorySlug = allowedCats.includes(catRaw) ? catRaw : 'technology';
+            return {
+              title: String(item?.title || '').trim().slice(0, 140),
+              categoryId,
+              subcategorySlug: String(item?.subcategorySlug || '').trim().slice(0, 80),
+              searchQuery: String(item?.searchQuery || item?.title || '').trim().slice(0, 140),
+              rationale: String(item?.rationale || '').trim().slice(0, 300),
+              priority: Math.max(1, Math.min(10, Number(item?.priority) || 9)),
+            };
+          })
+          .filter((t) => t.title.length >= 3);
+
+        res.json({ model: MODEL_ID, date: todayStr, topics });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Top-search discovery failed.';
+        res.status(502).json({ error: msg });
+      }
+    }
+  );
+
+  app.post(
+    '/api/ai/optimize-seo',
+    verifyStaffAuthorization,
+    async (req: Request, res: Response) => {
+      try {
+        const ai = getAiClient();
+        const { articles: rawArticles } = (req.body ?? {}) as {
+          articles?: Array<{
+            articleId?: string;
+            locale?: Locale;
+            slug?: string;
+            title?: string;
+            excerpt?: string;
+            categoryId?: string;
+            tags?: string[];
+            currentMetaTitle?: string;
+            currentMetaDescription?: string;
+            imageAlt?: string;
+          }>;
+        };
+
+        const batch = Array.isArray(rawArticles) ? rawArticles.slice(0, 12) : [];
+        if (batch.length === 0) {
+          res.status(400).json({ error: 'Provide at least one article to optimize SEO.' });
+          return;
+        }
+
+        const prompt = [
+          `You are QORVIA's Technical SEO Specialist. Optimize search engine metadata for each article below in its exact language ("en" for English, "bn" for natural Bengali Unicode script).`,
+          `Rules per article:`,
+          `- metaTitle: 50–65 characters, keyword-first, concise, ending with ' | QORVIA' when natural (max 160 chars).`,
+          `- metaDescription: 135–160 characters, informative, accurate to the article's excerpt without clickbait.`,
+          `- tags: 5–8 high-intent SEO tags in the article's language (English or Bengali).`,
+          `- imageAlt: clear, descriptive accessibility + image-search alt text (60–140 chars).`,
+          `Articles:\n${JSON.stringify(
+            batch.map((a) => ({
+              articleId: String(a.articleId || ''),
+              locale: a.locale === 'bn' ? 'bn' : 'en',
+              title: String(a.title || '').slice(0, 200),
+              excerpt: String(a.excerpt || '').slice(0, 400),
+              categoryId: String(a.categoryId || 'technology'),
+              currentTags: Array.isArray(a.tags) ? a.tags.slice(0, 8) : [],
+            })),
+            null,
+            2
+          )}`,
+        ].join('\n\n');
+
+        const seoRes = await ai.models.generateContent({
+          model: MODEL_ID,
+          contents: prompt,
+          config: {
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  articleId: { type: Type.STRING },
+                  metaTitle: { type: Type.STRING },
+                  metaDescription: { type: Type.STRING },
+                  tags: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                  },
+                  imageAlt: { type: Type.STRING },
+                },
+                required: ['articleId', 'metaTitle', 'metaDescription', 'tags', 'imageAlt'],
+              },
+            },
+          },
+        });
+
+        const parsed = JSON.parse((seoRes.text || '[]').trim());
+        const byId = new Map<string, Partial<{ articleId: string; metaTitle: string; metaDescription: string; tags: string[]; imageAlt: string }>>();
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (item?.articleId) byId.set(String(item.articleId), item);
+          }
+        }
+
+        const results = batch.map((a) => {
+          const articleId = String(a.articleId || '');
+          const rawOpt = byId.get(articleId) ?? {};
+          return sanitizeSeoOptimizationPayload(rawOpt, {
+            articleId,
+            locale: a.locale === 'bn' ? 'bn' : 'en',
+            slug: String(a.slug || articleId),
+            title: String(a.title || 'QORVIA Article'),
+            excerpt: String(a.excerpt || a.title || ''),
+            tags: Array.isArray(a.tags) ? a.tags.map(String) : [],
+            featuredImage: { src: '', alt: String(a.imageAlt || a.title || ''), caption: '' },
+            seo: {
+              metaTitle: String(a.currentMetaTitle || ''),
+              metaDescription: String(a.currentMetaDescription || ''),
+              canonicalPath: `/${a.locale === 'bn' ? 'bn' : 'en'}/article/${String(a.slug || articleId)}`,
+            },
+          });
+        });
+
+        res.json({ model: MODEL_ID, results });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'SEO optimization request failed.';
+        res.status(502).json({ error: msg });
+      }
+    }
+  );
+
+  app.post(
+    '/api/ai/auto-post',
+    verifyStaffAuthorization,
+    async (req: Request, res: Response) => {
+      try {
+        const ai = getAiClient();
+        const {
+          count = 1,
+          targetLocales = ['en', 'bn'],
+          existingTitles = [],
+          autoPublish = true,
+          authorId = 'ananya-rahman',
+        } = (req.body ?? {}) as {
+          count?: number;
+          targetLocales?: Array<'en' | 'bn'>;
+          existingTitles?: string[];
+          autoPublish?: boolean;
+          authorId?: string;
+        };
+
+        const safeCount = Math.max(1, Math.min(3, Number(count) || 1));
+        const locales: Array<'en' | 'bn'> =
+          Array.isArray(targetLocales) && targetLocales.length > 0
+            ? targetLocales.filter((l): l is 'en' | 'bn' => l === 'en' || l === 'bn')
+            : ['en', 'bn'];
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const avoidList = Array.isArray(existingTitles)
+          ? existingTitles.slice(0, 30).map((t) => String(t).slice(0, 140))
+          : [];
+
+        const trendRes = await ai.models.generateContent({
+          model: MODEL_ID,
+          contents: [
+            `Today is ${todayStr}. Use Google Search to pick the top ${safeCount} trending educational or technology search topics right now.`,
+            avoidList.length > 0 ? `Avoid existing titles: ${avoidList.join('; ')}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          config: {
+            tools: [{ googleSearch: {} }],
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          },
+        });
+
+        const extractTopicsRes = await ai.models.generateContent({
+          model: MODEL_ID,
+          contents: `Extract ${safeCount} topic object(s) as JSON array from:\n${(trendRes.text || '').slice(0, 5000)}`,
+          config: {
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  categoryId: { type: Type.STRING },
+                  subcategorySlug: { type: Type.STRING },
+                },
+                required: ['title', 'categoryId', 'subcategorySlug'],
+              },
+            },
+          },
+        });
+
+        const parsedTopics = JSON.parse((extractTopicsRes.text || '[]').trim());
+        const topicList = (Array.isArray(parsedTopics) ? parsedTopics : []).slice(0, safeCount);
+        const allowedCats: CategorySlug[] = [
+          'technology',
+          'education',
+          'digital-skills',
+          'general-knowledge',
+        ];
+        const generatedArticles: Article[] = [];
+
+        for (const t of topicList) {
+          const topicTitle = String(t?.title || '').trim().slice(0, 200);
+          if (topicTitle.length < 3) continue;
+          const catRaw = String(t?.categoryId || 'technology') as CategorySlug;
+          const categoryId: CategorySlug = allowedCats.includes(catRaw) ? catRaw : 'technology';
+          const subcategorySlug = String(t?.subcategorySlug || '').trim().slice(0, 80);
+
+          const researchRes = await ai.models.generateContent({
+            model: MODEL_ID,
+            contents: `Research factual specifications, dates, and context for: "${topicTitle}".`,
+            config: {
+              tools: [{ googleSearch: {} }],
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            },
+          });
+          const brief = (researchRes.text || '').trim().slice(0, 7000);
+          const groundedChunks = sanitizeGroundedUrls(
+            researchRes.candidates?.[0]?.groundingMetadata?.groundingChunks
+          );
+          const groundedSources = sanitizeGroundedSources(groundedChunks);
+          const translationGroupId = `grp-auto-${Date.now().toString(36)}`;
+
+          for (const loc of locales) {
+            const draftRes = await ai.models.generateContent({
+              model: MODEL_ID,
+              contents: [
+                `Write an SEO-optimized ${
+                  loc === 'bn' ? 'Bengali Unicode (বাংলা)' : 'English'
+                } article on "${topicTitle}".`,
+                `Research:\n${brief}`,
+                `Include 3–4 structured sections, metaTitle (50–65 chars), metaDescription (135–160 chars), 5 SEO tags, and ASCII slug.`,
+              ].join('\n\n'),
+              config: {
+                thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    title: { type: Type.STRING },
+                    slug: { type: Type.STRING },
+                    excerpt: { type: Type.STRING },
+                    tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    sections: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          heading: { type: Type.STRING },
+                          paragraphs: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        },
+                        required: ['heading', 'paragraphs'],
+                      },
+                    },
+                    keyTakeaways: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    metaTitle: { type: Type.STRING },
+                    metaDescription: { type: Type.STRING },
+                    verificationFlag: { type: Type.BOOLEAN },
+                    verificationNotes: { type: Type.STRING },
+                  },
+                  required: [
+                    'title',
+                    'slug',
+                    'excerpt',
+                    'tags',
+                    'sections',
+                    'keyTakeaways',
+                    'metaTitle',
+                    'metaDescription',
+                    'verificationFlag',
+                    'verificationNotes',
+                  ],
+                },
+              },
+            });
+
+            const parsedDraft = JSON.parse((draftRes.text || '{}').trim()) as Omit<
+              AiDraftLocalePayload,
+              'locale'
+            >;
+            const mapped = mapAiDraftToArticle({
+              draft: { locale: loc, ...parsedDraft },
+              translationGroupId,
+              categoryId,
+              subcategorySlug,
+              authorId: String(authorId || 'ananya-rahman'),
+              groundedSources,
+              publishImmediately: Boolean(autoPublish),
+            });
+            generatedArticles.push(mapped);
+          }
+        }
+
+        res.json({
+          model: MODEL_ID,
+          date: todayStr,
+          articles: generatedArticles,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Automated article post failed.';
         res.status(502).json({ error: msg });
       }
     }

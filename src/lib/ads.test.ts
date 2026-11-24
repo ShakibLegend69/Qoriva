@@ -192,3 +192,19 @@ test('resolvePlacementAd respects master switch, slot disable, locale precedence
   });
   assert.equal(killed.mode, 'disabled');
 });
+
+test('mergeDefaultMonetagAds provides https://uplcm.com/4/12340345 for article monetization', async () => {
+  const { mergeDefaultMonetagAds, MONETAG_DIRECT_LINK_URL } = await import('./adsStore');
+  const merged = mergeDefaultMonetagAds([]);
+  const resolved = resolvePlacementAd({
+    placement: 'article_bottom',
+    locale: 'en',
+    monetagAds: merged,
+  });
+  assert.equal(resolved.mode, 'monetag');
+  if (resolved.mode === 'monetag') {
+    assert.equal(resolved.entry.format, 'direct_link');
+    assert.equal(resolved.entry.directLinkUrl, MONETAG_DIRECT_LINK_URL);
+  }
+});
+

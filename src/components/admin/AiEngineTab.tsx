@@ -1,19 +1,28 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 import {
   AlertTriangle,
+  Bot,
   CheckCircle2,
   Clock,
+  Globe,
   Lightbulb,
   Play,
   Plus,
+  RefreshCw,
+  Search,
   Sparkles,
   Trash2,
+  TrendingUp,
 } from 'lucide-react';
 import type {
+  AiAutoPostConfig,
   AiDraftLocalePayload,
   AiJobRecord,
+  AiSeoOptimizationResult,
   AiSuggestedTopic,
+  AiTrendingTopicSuggestion,
+  Article,
   Author,
   Category,
   CategorySlug,
@@ -21,15 +30,19 @@ import type {
   TopicItem,
 } from '../../types/qorvia';
 import {
+  getTodayUtcDateKey,
   mapAiDraftToArticle,
   sanitizeGroundedSources,
+  shouldRunDailyAutoPost,
   validateTopicInput,
 } from '../../lib/aiDraftMapper';
 import {
   createAiJobInFirestore,
   createTopicInFirestore,
   deleteTopicInFirestore,
+  saveAiAutoPostConfigInFirestore,
   saveArticleInFirestore,
+  saveArticleSeoInFirestore,
   saveSourcesInFirestore,
   updateAiJobInFirestore,
   updateTopicStatusInFirestore,
@@ -40,10 +53,13 @@ interface AiEngineTabProps {
   firebaseUser: User;
   actorUid: string;
   actorEmail?: string | null;
+  articles: Article[];
   categories: Category[];
   authors: Author[];
   topics: TopicItem[];
   aiJobs: AiJobRecord[];
+  aiAutoPostConfig: AiAutoPostConfig;
+  isSuperAdmin: boolean;
   hasPublishPermission: boolean;
   hasRoleAdminPermission: boolean;
   onOpenReviewQueue: () => void;
@@ -53,15 +69,29 @@ export function AiEngineTab({
   firebaseUser,
   actorUid,
   actorEmail,
+  articles,
   categories,
   authors,
   topics,
   aiJobs,
+  aiAutoPostConfig,
+  isSuperAdmin,
   hasPublishPermission,
   hasRoleAdminPermission,
   onOpenReviewQueue,
 }: AiEngineTabProps) {
   const [aiHealth, setAiHealth] = useState<{ configured: boolean; model: string } | null>(null);
+
+  // Daily Auto-Post Config & Runner
+  const [autoConfig, setAutoConfig] = useState<AiAutoPostConfig>(aiAutoPostConfig);
+  const [savingAutoConfig, setSavingAutoConfig] = useState(false);
+  const [runningAutoPost, setRunningAutoPost] = useState(false);
+  const [trendingTopics, setTrendingTopics] = useState<AiTrendingTopicSuggestion[]>([]);
+  const autoRunLatchRef = useRef(false);
+
+  // Batch SEO Optimizer
+  const [optimizingSeo, setOptimizingSeo] = useState(false);
+  const [seoProgress, setSeoProgress] = useState<{ done: number; total: number } | null>(null);
 
   // Topic Composer
   const [topicTitle, setTopicTitle] = useState('');
@@ -90,6 +120,10 @@ export function AiEngineTab({
     text: string;
   } | null>(null);
 
+  useEffect(() => {
+    setAutoConfig(aiAutoPostConfig);
+  }, [aiAutoPostConfig]);
+
   const selectedCategory = useMemo(
     () => categories.find((c) => c.id === categoryId) ?? categories[0],
     [categories, categoryId]
@@ -101,6 +135,18 @@ export function AiEngineTab({
         .filter((t) => t.status === 'queued')
         .sort((a, b) => b.priority - a.priority),
     [topics]
+  );
+
+  const needsSeoCount = useMemo(
+    () =>
+      articles.filter(
+        (a) =>
+          !a.seo?.metaDescription ||
+          a.seo.metaDescription.trim().length < 100 ||
+          !a.tags ||
+          a.tags.length < 3
+      ).length,
+    [articles]
   );
 
   useEffect(() => {
@@ -209,135 +255,384 @@ export function AiEngineTab({
     }
   };
 
-  const executeGroundedDraftForTopic = async (params: {
-    topicId?: string;
-    title: string;
-    catId: CategorySlug;
-    subSlug: string;
-    locales: Locale[];
-    guidance?: string;
-  }) => {
-    const jobId = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    const model = aiHealth?.model || 'gemini-4-hydrogen';
-    const cat = categories.find((c) => c.id === params.catId) ?? selectedCategory;
-    const sub = cat?.subcategories.find((s) => s.slug === params.subSlug);
-
-    if (params.topicId) {
-      await updateTopicStatusInFirestore({ topicId: params.topicId, status: 'in_progress' });
-    }
-
-    await createAiJobInFirestore({
-      actorUid,
-      jobId,
-      topic: params.title,
-      categoryId: params.catId,
-      model,
-      localeTargets: params.locales,
-    });
-
-    try {
-      const token = await firebaseUser.getIdToken();
-      const res = await fetch('/api/ai/generate-draft', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          topicTitle: params.title,
-          categoryName: cat?.name.en ?? params.catId,
-          subcategoryName: sub?.name.en ?? params.subSlug,
-          targetLocales: params.locales,
-          editorialGuidance: params.guidance ?? '',
-        }),
-      });
-
-      const payload = (await res.json()) as {
-        model?: string;
-        groundedChunks?: Array<{ uri: string; title: string }>;
-        drafts?: AiDraftLocalePayload[];
-        error?: string;
-      };
-
-      if (!res.ok || !Array.isArray(payload.drafts) || payload.drafts.length === 0) {
-        throw new Error(payload.error || 'Gemini failed to return structured drafts.');
-      }
-
-      const groundedSources = sanitizeGroundedSources(payload.groundedChunks ?? []);
-      const translationGroupId = `grp-ai-${Date.now().toString(36)}`;
-      let anyFlagged = groundedSources.length === 0;
-
-      for (const draft of payload.drafts) {
-        if (draft.verificationFlag) anyFlagged = true;
-        const mappedArticle = mapAiDraftToArticle({
-          draft,
-          translationGroupId,
-          categoryId: params.catId,
-          subcategorySlug: params.subSlug || (cat?.subcategories[0]?.slug ?? ''),
-          authorId,
-          groundedSources,
-        });
-
-        await saveArticleInFirestore({
-          actorUid,
-          actorEmail,
-          article: mappedArticle,
-          isNew: true,
-          canPublishOrFeature: hasPublishPermission,
-        });
-
-        if (mappedArticle.sources.length > 0) {
-          await saveSourcesInFirestore({
-            articleId: mappedArticle.articleId,
-            sources: mappedArticle.sources,
-          });
-        }
-      }
-
-      const finalStatus = anyFlagged ? 'flagged' : 'completed';
-      await updateAiJobInFirestore({
-        jobId,
-        status: finalStatus,
-        error: anyFlagged
-          ? 'Flagged for human fact-checking: inspect Review Queue notes before approving.'
-          : undefined,
-      });
+  const executeGroundedDraftForTopic = useCallback(
+    async (params: {
+      topicId?: string;
+      title: string;
+      catId: CategorySlug;
+      subSlug: string;
+      locales: Locale[];
+      guidance?: string;
+      publishImmediately?: boolean;
+    }) => {
+      const jobId = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      const model = aiHealth?.model || 'gemini-4-hydrogen';
+      const cat = categories.find((c) => c.id === params.catId) ?? selectedCategory;
+      const sub = cat?.subcategories.find((s) => s.slug === params.subSlug);
+      const canPublishNow = Boolean(params.publishImmediately && hasPublishPermission);
 
       if (params.topicId) {
-        await updateTopicStatusInFirestore({
-          topicId: params.topicId,
-          status: anyFlagged ? 'flagged' : 'completed',
+        await updateTopicStatusInFirestore({ topicId: params.topicId, status: 'in_progress' });
+      }
+
+      await createAiJobInFirestore({
+        actorUid,
+        jobId,
+        topic: params.title,
+        categoryId: params.catId,
+        model,
+        localeTargets: params.locales,
+      });
+
+      try {
+        const token = await firebaseUser.getIdToken();
+        const res = await fetch('/api/ai/generate-draft', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            topicTitle: params.title,
+            categoryName: cat?.name.en ?? params.catId,
+            subcategoryName: sub?.name.en ?? params.subSlug,
+            targetLocales: params.locales,
+            editorialGuidance: params.guidance ?? '',
+          }),
         });
+
+        const payload = (await res.json()) as {
+          model?: string;
+          groundedChunks?: Array<{ uri: string; title: string }>;
+          drafts?: AiDraftLocalePayload[];
+          error?: string;
+        };
+
+        if (!res.ok || !Array.isArray(payload.drafts) || payload.drafts.length === 0) {
+          throw new Error(payload.error || 'Gemini failed to return structured drafts.');
+        }
+
+        const groundedSources = sanitizeGroundedSources(payload.groundedChunks ?? []);
+        const translationGroupId = `grp-ai-${Date.now().toString(36)}`;
+        let anyFlagged = groundedSources.length === 0;
+
+        for (const draft of payload.drafts) {
+          if (draft.verificationFlag) anyFlagged = true;
+          const mappedArticle = mapAiDraftToArticle({
+            draft,
+            translationGroupId,
+            categoryId: params.catId,
+            subcategorySlug: params.subSlug || (cat?.subcategories[0]?.slug ?? ''),
+            authorId,
+            groundedSources,
+            publishImmediately: canPublishNow,
+          });
+
+          await saveArticleInFirestore({
+            actorUid,
+            actorEmail,
+            article: mappedArticle,
+            isNew: true,
+            canPublishOrFeature: hasPublishPermission,
+          });
+
+          if (mappedArticle.sources.length > 0) {
+            await saveSourcesInFirestore({
+              articleId: mappedArticle.articleId,
+              sources: mappedArticle.sources,
+            });
+          }
+        }
+
+        const finalStatus = anyFlagged && !canPublishNow ? 'flagged' : 'completed';
+        await updateAiJobInFirestore({
+          jobId,
+          status: finalStatus,
+          error:
+            anyFlagged && !canPublishNow
+              ? 'Flagged for human fact-checking: inspect Review Queue notes before approving.'
+              : undefined,
+        });
+
+        if (params.topicId) {
+          await updateTopicStatusInFirestore({
+            topicId: params.topicId,
+            status: finalStatus,
+          });
+        }
+
+        await writeAuditLog({
+          actorUid,
+          actorEmail,
+          action: canPublishNow ? 'RUN_AI_AUTO_POST' : 'RUN_AI_CONTENT_DRAFT',
+          target: `aiJobs/${jobId}`,
+          metadata: {
+            translationGroupId,
+            locales: params.locales,
+            sourcesCount: groundedSources.length,
+            flagged: anyFlagged,
+            published: canPublishNow,
+          },
+        });
+
+        return {
+          count: payload.drafts.length,
+          flagged: anyFlagged,
+          sources: groundedSources.length,
+          published: canPublishNow,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'AI generation failed.';
+        await updateAiJobInFirestore({
+          jobId,
+          status: 'failed',
+          error: message,
+        });
+        if (params.topicId) {
+          await updateTopicStatusInFirestore({
+            topicId: params.topicId,
+            status: 'flagged',
+          });
+        }
+        throw err;
+      }
+    },
+    [
+      actorEmail,
+      actorUid,
+      aiHealth?.model,
+      authorId,
+      categories,
+      firebaseUser,
+      hasPublishPermission,
+      selectedCategory,
+    ]
+  );
+
+  const runDailyTopSearchAutoPost = useCallback(
+    async (isAutomaticTrigger = false) => {
+      const locales: Locale[] =
+        autoConfig.localeTargets.length > 0 ? autoConfig.localeTargets : ['en', 'bn'];
+      setFeedback(null);
+      setRunningAutoPost(true);
+
+      try {
+        const token = await firebaseUser.getIdToken();
+        const discoverRes = await fetch('/api/ai/discover-top-search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            count: autoConfig.dailyCount,
+            existingTitles: articles.map((a) => a.title),
+          }),
+        });
+
+        const discoverData = (await discoverRes.json()) as {
+          topics?: AiTrendingTopicSuggestion[];
+          error?: string;
+        };
+
+        if (!discoverRes.ok || !Array.isArray(discoverData.topics) || discoverData.topics.length === 0) {
+          throw new Error(
+            discoverData.error || 'Gemini could not discover trending top-search topics.'
+          );
+        }
+
+        const discovered = discoverData.topics.slice(0, autoConfig.dailyCount);
+        setTrendingTopics(discovered);
+
+        let postedCount = 0;
+        const canAutoPublish = autoConfig.autoPublish && hasPublishPermission;
+
+        for (const t of discovered) {
+          const res = await executeGroundedDraftForTopic({
+            title: t.title,
+            catId: t.categoryId,
+            subSlug: t.subcategorySlug || '',
+            locales,
+            guidance: `Optimize SEO headings, semantic keywords, and factual answers for today's top Google Search query: "${t.searchQuery}".`,
+            publishImmediately: canAutoPublish,
+          });
+          postedCount += res.count;
+        }
+
+        const todayKey = getTodayUtcDateKey();
+        const summary = `${isAutomaticTrigger ? 'Auto-posted' : 'Posted'} ${postedCount} ${
+          canAutoPublish ? 'live' : 'review-queued'
+        } SEO article(s) from ${discovered.length} daily top-search topic(s).`;
+
+        if (isSuperAdmin && postedCount > 0) {
+          const nextConfig: AiAutoPostConfig = {
+            ...autoConfig,
+            localeTargets: locales,
+            lastRunDate: todayKey,
+            lastRunSummary: summary,
+          };
+          setAutoConfig(nextConfig);
+          await saveAiAutoPostConfigInFirestore({
+            actorUid,
+            actorEmail,
+            config: nextConfig,
+          });
+        }
+
+        setFeedback({ type: 'success', text: summary });
+      } catch (err) {
+        setFeedback({
+          type: 'error',
+          text: err instanceof Error ? err.message : 'Daily top-search auto-post failed.',
+        });
+      } finally {
+        setRunningAutoPost(false);
+      }
+    },
+    [
+      actorEmail,
+      actorUid,
+      articles,
+      autoConfig,
+      executeGroundedDraftForTopic,
+      firebaseUser,
+      hasPublishPermission,
+      isSuperAdmin,
+    ]
+  );
+
+  // Automatic daily runner when enabled and today's UTC date hasn't executed yet
+  useEffect(() => {
+    if (
+      !autoRunLatchRef.current &&
+      isSuperAdmin &&
+      hasPublishPermission &&
+      shouldRunDailyAutoPost(aiAutoPostConfig) &&
+      !runningAutoPost &&
+      !runningBatch &&
+      runningTopicId === null
+    ) {
+      autoRunLatchRef.current = true;
+      void runDailyTopSearchAutoPost(true);
+    }
+  }, [
+    aiAutoPostConfig,
+    hasPublishPermission,
+    isSuperAdmin,
+    runDailyTopSearchAutoPost,
+    runningAutoPost,
+    runningBatch,
+    runningTopicId,
+  ]);
+
+  const handleSaveAutoPostConfig = async () => {
+    if (!isSuperAdmin) return;
+    setFeedback(null);
+    setSavingAutoConfig(true);
+    try {
+      const locales: Locale[] =
+        autoConfig.localeTargets.length > 0 ? autoConfig.localeTargets : ['en', 'bn'];
+      const nextConfig: AiAutoPostConfig = { ...autoConfig, localeTargets: locales };
+      await saveAiAutoPostConfigInFirestore({
+        actorUid,
+        actorEmail,
+        config: nextConfig,
+      });
+      setFeedback({
+        type: 'success',
+        text: nextConfig.enabled
+          ? 'Daily top-search auto-posting enabled and saved.'
+          : 'Auto-post preferences saved.',
+      });
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Unable to save auto-post settings.',
+      });
+    } finally {
+      setSavingAutoConfig(false);
+    }
+  };
+
+  const handleRunBatchSeo = async () => {
+    if (articles.length === 0) return;
+    setFeedback(null);
+    setOptimizingSeo(true);
+    setSeoProgress({ done: 0, total: articles.length });
+
+    let optimizedCount = 0;
+    try {
+      const token = await firebaseUser.getIdToken();
+      const chunkSize = 10;
+
+      for (let i = 0; i < articles.length; i += chunkSize) {
+        const chunk = articles.slice(i, i + chunkSize);
+        const res = await fetch('/api/ai/optimize-seo', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            articles: chunk.map((a) => ({
+              articleId: a.articleId,
+              locale: a.locale,
+              slug: a.slug,
+              title: a.title,
+              excerpt: a.excerpt,
+              categoryId: a.categoryId,
+              tags: a.tags,
+              currentMetaTitle: a.seo?.metaTitle,
+              currentMetaDescription: a.seo?.metaDescription,
+              imageAlt: a.featuredImage?.alt,
+            })),
+          }),
+        });
+
+        const payload = (await res.json()) as {
+          results?: AiSeoOptimizationResult[];
+          error?: string;
+        };
+
+        if (!res.ok || !Array.isArray(payload.results)) {
+          throw new Error(payload.error || 'Gemini SEO optimization batch failed.');
+        }
+
+        const articleById = new Map(chunk.map((a) => [a.articleId, a]));
+        for (const seoResult of payload.results) {
+          const target = articleById.get(seoResult.articleId);
+          if (!target) continue;
+          await saveArticleSeoInFirestore({
+            actorUid,
+            actorEmail,
+            article: target,
+            seoResult,
+            isSuperAdmin,
+          });
+          optimizedCount += 1;
+          setSeoProgress({ done: optimizedCount, total: articles.length });
+        }
       }
 
       await writeAuditLog({
         actorUid,
         actorEmail,
-        action: 'RUN_AI_CONTENT_DRAFT',
-        target: `aiJobs/${jobId}`,
-        metadata: {
-          translationGroupId,
-          locales: params.locales,
-          sourcesCount: groundedSources.length,
-          flagged: anyFlagged,
-        },
+        action: 'RUN_AI_SEO_OPTIMIZATION',
+        target: 'articles/*',
+        metadata: { optimizedCount },
       });
 
-      return { count: payload.drafts.length, flagged: anyFlagged, sources: groundedSources.length };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'AI generation failed.';
-      await updateAiJobInFirestore({
-        jobId,
-        status: 'failed',
-        error: message,
+      setFeedback({
+        type: 'success',
+        text: `Gemini optimized SEO meta titles, descriptions, tags, and image alt text across ${optimizedCount} article(s).`,
       });
-      if (params.topicId) {
-        await updateTopicStatusInFirestore({
-          topicId: params.topicId,
-          status: 'flagged',
-        });
-      }
-      throw err;
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Batch SEO optimization failed.',
+      });
+    } finally {
+      setOptimizingSeo(false);
     }
   };
 
@@ -431,6 +726,19 @@ export function AiEngineTab({
     }
   };
 
+  const toggleAutoLocale = (loc: Locale) => {
+    setAutoConfig((prev) => {
+      const exists = prev.localeTargets.includes(loc);
+      const next = exists
+        ? prev.localeTargets.filter((l) => l !== loc)
+        : [...prev.localeTargets, loc];
+      return {
+        ...prev,
+        localeTargets: next.length > 0 ? next : [loc],
+      };
+    });
+  };
+
   return (
     <div className="space-y-8">
       {/* Banner Header */}
@@ -439,15 +747,14 @@ export function AiEngineTab({
           <div className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#4263EB] dark:text-[#748FFC]">
             <Sparkles className="w-4 h-4" aria-hidden="true" />
             <span>
-              Gemini Grounded Editorial Engine · Model: {aiHealth?.model || 'gemini-4-hydrogen'}
+              Gemini Grounded Editorial & SEO Engine · Model: {aiHealth?.model || 'gemini-4-hydrogen'}
             </span>
           </div>
           <h2 className="font-editorial text-2xl font-bold text-[#101827] dark:text-[#F5F4EF]">
-            Automated Topic Discovery & Source-Grounded Drafting
+            Daily Top-Search Auto-Post, Grounded Drafting & Catalog SEO
           </h2>
           <p className="text-xs text-black/65 dark:text-[#A5AAB4]">
-            Runs server-side Google Search grounding and structured JSON synthesis. Every generated EN/BN draft enters{' '}
-            <span className="font-mono-tabular font-semibold">pending_review</span> and never auto-publishes.
+            Discovers today’s top Google Search trends, auto-posts SEO-optimized EN/BN articles via Gemini API, and optimizes metadata across your catalog.
           </p>
         </div>
 
@@ -462,7 +769,7 @@ export function AiEngineTab({
           </button>
           <button
             type="button"
-            disabled={runningBatch || queuedTopics.length === 0}
+            disabled={runningBatch || runningAutoPost || queuedTopics.length === 0}
             onClick={handleRunDailyBatch}
             className="btn-transparent-black-solid inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
           >
@@ -470,7 +777,7 @@ export function AiEngineTab({
             <span>
               {runningBatch
                 ? 'Running Daily Batch...'
-                : `Run Daily Batch (${Math.min(3, queuedTopics.length)} Queued)`}
+                : `Run Queued Batch (${Math.min(3, queuedTopics.length)} Queued)`}
             </span>
           </button>
         </div>
@@ -488,6 +795,254 @@ export function AiEngineTab({
           {feedback.text}
         </div>
       )}
+
+      {/* Daily Top-Search Auto-Post & Gemini Batch SEO Row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Daily Top-Search Auto-Post */}
+        <section className="border border-black/10 dark:border-white/10 rounded-2xl p-6 bg-white dark:bg-[#11192B] space-y-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[#4263EB] dark:text-[#748FFC]">
+                <TrendingUp className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Daily Top-Search Automation</span>
+              </div>
+              <h3 className="font-editorial text-xl font-semibold text-[#101827] dark:text-[#F5F4EF]">
+                Gemini Auto Article Poster
+              </h3>
+            </div>
+            <span className="font-mono-tabular text-[11px] px-2 py-1 rounded bg-[#F5F4EF] dark:bg-white/[0.06] text-black/70 dark:text-[#A5AAB4]">
+              {autoConfig.enabled ? 'Auto Daily: ON' : 'Manual Trigger'}
+            </span>
+          </div>
+
+          <p className="text-xs text-black/65 dark:text-[#A5AAB4] leading-relaxed">
+            Searches today’s highest-volume queries via Gemini + Google Search grounding, avoids duplicate titles, generates bilingual SEO-optimized articles, and saves them to Firestore.
+          </p>
+
+          <div className="space-y-2.5 text-xs">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoConfig.enabled}
+                onChange={(e) =>
+                  setAutoConfig((prev) => ({ ...prev, enabled: e.target.checked }))
+                }
+              />
+              <span className="font-medium">
+                Auto-post once per day automatically when Editorial Console opens
+              </span>
+            </label>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoConfig.autoPublish}
+                onChange={(e) =>
+                  setAutoConfig((prev) => ({ ...prev, autoPublish: e.target.checked }))
+                }
+              />
+              <span className="font-medium">
+                Publish live immediately (requires reviewer/superAdmin permission)
+              </span>
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <div>
+              <label htmlFor="ai-autopost-count" className="block text-xs font-semibold mb-1.5">
+                Daily Top-Search Topics
+              </label>
+              <select
+                id="ai-autopost-count"
+                value={autoConfig.dailyCount}
+                onChange={(e) =>
+                  setAutoConfig((prev) => ({
+                    ...prev,
+                    dailyCount: Math.max(1, Math.min(3, Number(e.target.value))),
+                  }))
+                }
+                className="w-full min-h-[38px] px-3 py-1.5 rounded-lg bg-white dark:bg-[#0B111E] border border-black/15 dark:border-white/15 text-xs"
+              >
+                <option value={1}>1 Top-Search Topic / day</option>
+                <option value={2}>2 Top-Search Topics / day</option>
+                <option value={3}>3 Top-Search Topics / day</option>
+              </select>
+            </div>
+
+            <div>
+              <span className="block text-xs font-semibold mb-1.5">Target Editions</span>
+              <div className="flex items-center gap-4 min-h-[38px]">
+                <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoConfig.localeTargets.includes('en')}
+                    onChange={() => toggleAutoLocale('en')}
+                  />
+                  <span>EN</span>
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoConfig.localeTargets.includes('bn')}
+                    onChange={() => toggleAutoLocale('bn')}
+                  />
+                  <span>BN</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {(autoConfig.lastRunDate || autoConfig.lastRunSummary) && (
+            <div className="rounded-xl bg-[#F5F4EF]/70 dark:bg-white/[0.03] border border-black/10 dark:border-white/10 px-3.5 py-2.5 text-[11px] space-y-0.5">
+              <div className="font-mono-tabular text-black/60 dark:text-[#A5AAB4]">
+                Last Auto-Post Date: {autoConfig.lastRunDate || 'Never'}
+              </div>
+              {autoConfig.lastRunSummary && (
+                <div className="font-medium text-[#101827] dark:text-[#F5F4EF]">
+                  {autoConfig.lastRunSummary}
+                </div>
+              )}
+            </div>
+          )}
+
+          {trendingTopics.length > 0 && (
+            <div className="space-y-1.5 pt-1">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-black/55 dark:text-[#A5AAB4]">
+                Today’s Discovered Top Searches
+              </div>
+              <div className="space-y-1.5">
+                {trendingTopics.map((t, idx) => (
+                  <div
+                    key={idx}
+                    className="rounded-lg border border-black/10 dark:border-white/10 px-3 py-2 text-xs bg-[#F5F4EF]/40 dark:bg-white/[0.02]"
+                  >
+                    <div className="font-semibold text-[#101827] dark:text-[#F5F4EF]">
+                      {t.title}
+                    </div>
+                    <div className="font-mono-tabular text-[11px] text-black/60 dark:text-[#A5AAB4]">
+                      Search query: “{t.searchQuery}” · {t.categoryId}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2.5 pt-1">
+            {isSuperAdmin && (
+              <button
+                type="button"
+                disabled={savingAutoConfig}
+                onClick={handleSaveAutoPostConfig}
+                className="btn-transparent-black inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                <Bot className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{savingAutoConfig ? 'Saving...' : 'Save Auto-Post Settings'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={runningAutoPost || runningBatch || runningTopicId !== null}
+              onClick={() => runDailyTopSearchAutoPost(false)}
+              className="btn-transparent-black-solid inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
+            >
+              <TrendingUp className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>
+                {runningAutoPost ? 'Auto-Posting Top Search...' : 'Post Daily Top-Search Now'}
+              </span>
+            </button>
+          </div>
+        </section>
+
+        {/* Gemini SEO Optimizer for All Articles */}
+        <section className="border border-black/10 dark:border-white/10 rounded-2xl p-6 bg-white dark:bg-[#11192B] flex flex-col justify-between space-y-4">
+          <div className="space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[#22A06B]">
+                  <Search className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Catalog-Wide Search Engine Optimization</span>
+                </div>
+                <h3 className="font-editorial text-xl font-semibold text-[#101827] dark:text-[#F5F4EF]">
+                  Gemini SEO Optimizer (All Articles)
+                </h3>
+              </div>
+              <span className="font-mono-tabular text-[11px] px-2 py-1 rounded bg-[#F5F4EF] dark:bg-white/[0.06] text-black/70 dark:text-[#A5AAB4]">
+                {articles.length} Articles
+              </span>
+            </div>
+
+            <p className="text-xs text-black/65 dark:text-[#A5AAB4] leading-relaxed">
+              Runs Gemini across every EN & BN article in your catalog to craft 50–65 char keyword-first meta titles, 135–160 char meta descriptions, semantic SEO tags, and accessible image alt descriptions.
+            </p>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl border border-black/10 dark:border-white/10 p-3.5 bg-[#F5F4EF]/50 dark:bg-white/[0.02]">
+                <div className="font-mono-tabular text-2xl font-bold text-[#101827] dark:text-[#F5F4EF]">
+                  {articles.length}
+                </div>
+                <div className="text-[11px] text-black/60 dark:text-[#A5AAB4] mt-0.5">
+                  Total Articles Indexed
+                </div>
+              </div>
+              <div className="rounded-xl border border-black/10 dark:border-white/10 p-3.5 bg-[#F5F4EF]/50 dark:bg-white/[0.02]">
+                <div className="font-mono-tabular text-2xl font-bold text-[#4263EB] dark:text-[#748FFC]">
+                  {needsSeoCount}
+                </div>
+                <div className="text-[11px] text-black/60 dark:text-[#A5AAB4] mt-0.5">
+                  Can Benefit From SEO Refresh
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-black/10 dark:border-white/10 px-3.5 py-2.5 text-[11px] text-black/70 dark:text-[#A5AAB4] flex items-center gap-2">
+              <Globe className="w-3.5 h-3.5 text-[#4263EB] shrink-0" aria-hidden="true" />
+              <span>
+                Preserves bilingual canonical URLs (<code>/en/article/...</code> &{' '}
+                <code>/bn/article/...</code>) and updates sitemap/OpenGraph/JSON-LD metadata cleanly.
+              </span>
+            </div>
+
+            {seoProgress && (
+              <div className="space-y-1.5">
+                <div className="flex justify-between font-mono-tabular text-[11px] text-black/65 dark:text-[#A5AAB4]">
+                  <span>SEO Optimization Progress</span>
+                  <span>
+                    {seoProgress.done} / {seoProgress.total}
+                  </span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
+                  <div
+                    className="h-full bg-[#22A06B] transition-all duration-300"
+                    style={{
+                      width: `${Math.round((seoProgress.done / Math.max(1, seoProgress.total)) * 100)}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-1">
+            <button
+              type="button"
+              disabled={optimizingSeo || runningAutoPost || articles.length === 0}
+              onClick={handleRunBatchSeo}
+              className="btn-transparent-black-solid inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${optimizingSeo ? 'animate-spin' : ''}`}
+                aria-hidden="true"
+              />
+              <span>
+                {optimizingSeo
+                  ? `Optimizing SEO (${seoProgress?.done ?? 0}/${articles.length})...`
+                  : `Run Gemini SEO for All ${articles.length} Articles`}
+              </span>
+            </button>
+          </div>
+        </section>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Left: Topic Discovery & Composer */}
@@ -631,7 +1186,7 @@ export function AiEngineTab({
                 </button>
                 <button
                   type="button"
-                  disabled={runningTopicId !== null || runningBatch}
+                  disabled={runningTopicId !== null || runningBatch || runningAutoPost}
                   onClick={handleRunCustomNow}
                   className="btn-transparent-black-solid inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
                 >
@@ -756,7 +1311,7 @@ export function AiEngineTab({
                     <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
-                        disabled={runningTopicId !== null || runningBatch}
+                        disabled={runningTopicId !== null || runningBatch || runningAutoPost}
                         onClick={() => handleGenerateTopicNow(t)}
                         className="btn-transparent-black-solid inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
                       >

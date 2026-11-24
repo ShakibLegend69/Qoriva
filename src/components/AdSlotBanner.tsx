@@ -173,28 +173,47 @@ export function AdSlotBanner({
 
       {resolved.mode === 'monetag' && (
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 py-2 border-t border-black/10 dark:border-white/10">
-          <div>
-            <p className="text-sm font-medium text-[#101827] dark:text-[#F5F4EF]">
-              {resolved.entry.name}
-            </p>
-            <p className="text-xs text-black/60 dark:text-[#A5AAB4] mt-0.5 font-mono-tabular">
-              Monetag · Zone #{resolved.entry.zoneId} · {resolved.entry.format.replace(/_/g, ' ')}
-            </p>
-          </div>
           {resolved.entry.format === 'direct_link' && resolved.entry.directLinkUrl ? (
-            <a
-              href={resolved.entry.directLinkUrl}
-              target="_blank"
-              rel="noopener noreferrer sponsored"
-              className="btn-transparent-black inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium whitespace-nowrap shrink-0"
-            >
-              <span>Sponsored Link</span>
-              <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-            </a>
+            <>
+              <div>
+                <a
+                  href={resolved.entry.directLinkUrl}
+                  target="_blank"
+                  rel="noopener noreferrer sponsored"
+                  className="text-sm font-medium text-[#101827] dark:text-[#F5F4EF] hover:text-[#4263EB] dark:hover:text-[#748FFC] underline-offset-4 hover:underline"
+                >
+                  {resolved.entry.name}
+                </a>
+                <p className="text-xs text-black/60 dark:text-[#A5AAB4] mt-0.5">
+                  {locale === 'bn'
+                    ? 'স্পনসরড রিসোর্স ও পার্টনার লিংক'
+                    : 'Sponsored Partner Resource · Verified External Offer'}
+                </p>
+              </div>
+              <a
+                href={resolved.entry.directLinkUrl}
+                target="_blank"
+                rel="noopener noreferrer sponsored"
+                className="btn-transparent-black-solid inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium whitespace-nowrap shrink-0"
+              >
+                <span>{locale === 'bn' ? 'ভিজিট করুন' : 'Open Sponsor'}</span>
+                <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+              </a>
+            </>
           ) : (
-            <span className="text-xs text-[#22A06B] font-medium whitespace-nowrap">
-              Active Placement
-            </span>
+            <>
+              <div>
+                <p className="text-sm font-medium text-[#101827] dark:text-[#F5F4EF]">
+                  {resolved.entry.name}
+                </p>
+                <p className="text-xs text-black/60 dark:text-[#A5AAB4] mt-0.5 font-mono-tabular">
+                  Monetag · Zone #{resolved.entry.zoneId} · {resolved.entry.format.replace(/_/g, ' ')}
+                </p>
+              </div>
+              <span className="text-xs text-[#22A06B] font-medium whitespace-nowrap">
+                Active Placement
+              </span>
+            </>
           )}
         </div>
       )}

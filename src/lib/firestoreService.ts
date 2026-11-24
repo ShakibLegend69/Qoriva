@@ -28,8 +28,10 @@ import type {
   AdProvider,
   AdSenseFormat,
   AdSlotConfig,
+  AiAutoPostConfig,
   AiJobRecord,
   AiJobStatus,
+  AiSeoOptimizationResult,
   Article,
   ArticleStatus,
   Category,
@@ -43,6 +45,7 @@ import type {
   TopicItem,
   TopicStatus,
 } from '../types/qorvia';
+import { DEFAULT_AI_AUTO_POST_CONFIG } from './aiDraftMapper';
 import { DEFAULT_GLOBAL_AD_SETTINGS } from './adsStore';
 import { SEED_ARTICLES, SEED_AUTHORS, SEED_CATEGORIES } from '../data/seedCatalog';
 
@@ -900,6 +903,136 @@ export async function saveGlobalAdSettingsInFirestore(params: {
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export function subscribeAiAutoPostConfig(
+  onData: (config: AiAutoPostConfig) => void
+): Unsubscribe {
+  return onSnapshot(
+    doc(db, 'siteSettings', 'public'),
+    (snap) => {
+      if (!snap.exists()) {
+        onData(DEFAULT_AI_AUTO_POST_CONFIG);
+        return;
+      }
+      const aiCfg = (snap.data()?.aiConfiguration as Record<string, unknown>) || {};
+      const rawLocales = Array.isArray(aiCfg.localeTargets)
+        ? (aiCfg.localeTargets.filter((l) => l === 'en' || l === 'bn') as Locale[])
+        : DEFAULT_AI_AUTO_POST_CONFIG.localeTargets;
+      onData({
+        enabled: Boolean(aiCfg.enabled),
+        autoPublish: aiCfg.autoPublish !== false,
+        dailyCount:
+          typeof aiCfg.dailyCount === 'number'
+            ? Math.max(1, Math.min(3, Math.round(aiCfg.dailyCount)))
+            : DEFAULT_AI_AUTO_POST_CONFIG.dailyCount,
+        localeTargets: rawLocales.length > 0 ? rawLocales : ['en', 'bn'],
+        lastRunDate: typeof aiCfg.lastRunDate === 'string' ? aiCfg.lastRunDate : '',
+        lastRunSummary: typeof aiCfg.lastRunSummary === 'string' ? aiCfg.lastRunSummary : '',
+        updatedAt: formatTimestamp(snap.data()?.updatedAt),
+      });
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.GET, 'siteSettings/public');
+    }
+  );
+}
+
+export async function saveAiAutoPostConfigInFirestore(params: {
+  actorUid: string;
+  actorEmail?: string | null;
+  config: AiAutoPostConfig;
+}): Promise<void> {
+  const path = 'siteSettings/public';
+  try {
+    await setDoc(
+      doc(db, 'siteSettings', 'public'),
+      {
+        settingId: 'public',
+        aiConfiguration: {
+          enabled: params.config.enabled,
+          autoPublish: params.config.autoPublish,
+          dailyCount: Math.max(1, Math.min(3, Math.round(params.config.dailyCount || 2))),
+          localeTargets: params.config.localeTargets.slice(0, 2),
+          lastRunDate: (params.config.lastRunDate || '').slice(0, 32),
+          lastRunSummary: (params.config.lastRunSummary || '').slice(0, 240),
+        },
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    await writeAuditLog({
+      actorUid: params.actorUid,
+      actorEmail: params.actorEmail,
+      action: 'UPDATE_AI_AUTOPOST_CONFIG',
+      target: path,
+      metadata: {
+        enabled: params.config.enabled,
+        autoPublish: params.config.autoPublish,
+        dailyCount: params.config.dailyCount,
+      },
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function saveArticleSeoInFirestore(params: {
+  actorUid: string;
+  actorEmail?: string | null;
+  article: Article;
+  seoResult: AiSeoOptimizationResult;
+  isSuperAdmin: boolean;
+}): Promise<void> {
+  const { actorUid, actorEmail, article, seoResult, isSuperAdmin } = params;
+  if (!isValidDocumentId(article.articleId)) {
+    throw new Error('Invalid article ID.');
+  }
+  const path = `articles/${article.articleId}`;
+  try {
+    const refDoc = doc(db, 'articles', article.articleId);
+    const snap = await getDoc(refDoc);
+    const updatedSeo = {
+      metaTitle: seoResult.metaTitle.slice(0, 180),
+      metaDescription: seoResult.metaDescription.slice(0, 320),
+      canonicalPath: article.seo?.canonicalPath || `/${article.locale}/article/${article.slug}`,
+    };
+
+    if (!snap.exists()) {
+      await saveArticleInFirestore({
+        actorUid,
+        actorEmail,
+        article: {
+          ...article,
+          seo: updatedSeo,
+          tags: seoResult.tags.slice(0, 15),
+          featuredImage: {
+            ...article.featuredImage,
+            alt: seoResult.imageAlt.slice(0, 300),
+          },
+        },
+        isNew: true,
+        canPublishOrFeature: isSuperAdmin,
+      });
+      return;
+    }
+
+    await updateDoc(refDoc, {
+      seo: updatedSeo,
+      ...(isSuperAdmin
+        ? {
+            tags: seoResult.tags.slice(0, 15),
+            featuredImage: {
+              ...article.featuredImage,
+              alt: seoResult.imageAlt.slice(0, 300),
+            },
+          }
+        : {}),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 

@@ -23,6 +23,8 @@ import type {
 } from '../../types/qorvia';
 import {
   ALL_AD_PLACEMENTS,
+  MONETAG_DIRECT_LINK_URL,
+  MONETAG_DIRECT_LINK_ZONE_ID,
   validateAdSenseSlotInput,
   validateDirectBannerInput,
   validateGlobalAdSettings,
@@ -960,9 +962,33 @@ export function AdsManagerTab({
             <h2 className="font-editorial text-xl font-semibold mb-1">
               Add Monetag Ad Zone
             </h2>
-            <p className="text-xs text-black/60 dark:text-[#A5AAB4] mb-5">
+            <p className="text-xs text-black/60 dark:text-[#A5AAB4] mb-3">
               Saved directly to Cloud Firestore <span className="font-mono-tabular">adCampaigns</span>.
             </p>
+            <div className="mb-4 p-3 rounded-xl border border-[#4263EB]/30 bg-[#4263EB]/[0.05] flex items-center justify-between gap-2 text-xs">
+              <div className="min-w-0">
+                <div className="font-semibold text-[#101827] dark:text-[#F5F4EF]">
+                  Active Direct Link ({MONETAG_DIRECT_LINK_ZONE_ID})
+                </div>
+                <div className="font-mono-tabular text-[11px] text-black/60 dark:text-[#A5AAB4] truncate">
+                  {MONETAG_DIRECT_LINK_URL}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setMonetagName('Featured Partner Resource');
+                  setZoneId(MONETAG_DIRECT_LINK_ZONE_ID);
+                  setFormat('direct_link');
+                  setMonetagPlacement('article_bottom');
+                  setScriptDomain('uplcm.com');
+                  setDirectLinkUrl(MONETAG_DIRECT_LINK_URL);
+                }}
+                className="btn-transparent-black px-2.5 py-1.5 rounded-lg text-[11px] font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Pre-fill Link
+              </button>
+            </div>
 
             <form onSubmit={handleAddMonetag} noValidate className="space-y-4">
               <div>

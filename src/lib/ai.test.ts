@@ -79,4 +79,75 @@ test('mapAiDraftToArticle always enforces pending_review and blueprint bounds', 
   assert.match(article.slug, /^[a-z0-9-]+$/);
   assert.ok(article.contentBlocks.length >= 2);
   assert.equal(article.sources.length, 1);
+
+  const autoPublished = mapAiDraftToArticle({
+    draft: {
+      locale: 'en',
+      title: 'Top Search Tech Guide',
+      slug: 'top-search-tech-guide',
+      excerpt: 'Concise daily explainer generated from verified search trends.',
+      tags: ['Tech', 'Search'],
+      sections: [{ heading: 'Overview', paragraphs: ['Verified architectural summary.'] }],
+      keyTakeaways: ['Key verified point'],
+      metaTitle: 'Top Search Tech Guide | QORVIA',
+      metaDescription: 'Concise daily explainer generated from verified search trends and primary docs.',
+      verificationFlag: false,
+      verificationNotes: '',
+    },
+    translationGroupId: 'grp-ai-autopub',
+    categoryId: 'technology',
+    subcategorySlug: 'artificial-intelligence',
+    authorId: 'ananya-rahman',
+    groundedSources: sources,
+    publishImmediately: true,
+  });
+  assert.equal(autoPublished.status, 'published');
 });
+
+test('shouldRunDailyAutoPost and sanitizeSeoOptimizationPayload enforce schedule and blueprint bounds', async () => {
+  const {
+    DEFAULT_AI_AUTO_POST_CONFIG,
+    sanitizeSeoOptimizationPayload,
+    shouldRunDailyAutoPost,
+  } = await import('./aiDraftMapper');
+
+  assert.equal(shouldRunDailyAutoPost(DEFAULT_AI_AUTO_POST_CONFIG, '2026-11-24'), false);
+  assert.equal(
+    shouldRunDailyAutoPost(
+      { ...DEFAULT_AI_AUTO_POST_CONFIG, enabled: true, lastRunDate: '2026-11-23' },
+      '2026-11-24'
+    ),
+    true
+  );
+  assert.equal(
+    shouldRunDailyAutoPost(
+      { ...DEFAULT_AI_AUTO_POST_CONFIG, enabled: true, lastRunDate: '2026-11-24' },
+      '2026-11-24'
+    ),
+    false
+  );
+
+  const sanitized = sanitizeSeoOptimizationPayload(
+    {
+      metaTitle: 'X'.repeat(250),
+      metaDescription: 'Y'.repeat(400),
+      tags: Array.from({ length: 20 }, (_, idx) => `tag-${idx}`),
+      imageAlt: 'Z'.repeat(350),
+    },
+    {
+      articleId: 'art-1',
+      locale: 'en',
+      slug: 'sample-article',
+      title: 'Sample Article Title',
+      excerpt: 'Sample article summary text for testing SEO bounds.',
+      tags: ['Fallback'],
+      featuredImage: { src: '/img.jpg', alt: 'Old alt', caption: '' },
+      seo: { metaTitle: 'Old', metaDescription: 'Old desc', canonicalPath: '/en/article/sample' },
+    }
+  );
+  assert.equal(sanitized.metaTitle.length, 180);
+  assert.equal(sanitized.metaDescription.length, 320);
+  assert.equal(sanitized.tags.length, 15);
+  assert.equal(sanitized.imageAlt.length, 300);
+});
+

@@ -67,19 +67,50 @@ export const DEFAULT_GLOBAL_AD_SETTINGS: GlobalAdSettings = {
 
 const STORAGE_KEY = 'qorvia_phase1_monetag_ads_v1';
 
+export const MONETAG_DIRECT_LINK_URL = 'https://uplcm.com/4/12340345';
+export const MONETAG_DIRECT_LINK_ZONE_ID = '12340345';
+
 export const DEFAULT_MONETAG_ADS: MonetagAdEntry[] = [
   {
-    id: 'monetag-default-inpage',
-    name: 'Global Editorial In-Page Push (Sample Slot)',
-    zoneId: '',
-    format: 'in_page_push',
+    id: 'monetag-direct-12340345-bottom',
+    name: 'Featured Partner Resource',
+    zoneId: MONETAG_DIRECT_LINK_ZONE_ID,
+    format: 'direct_link',
     placement: 'article_bottom',
     locale: 'all',
-    scriptDomain: 'alwingulla.com',
-    enabled: false,
-    createdAt: '2026-11-01T00:00:00Z',
+    scriptDomain: 'uplcm.com',
+    directLinkUrl: MONETAG_DIRECT_LINK_URL,
+    enabled: true,
+    createdAt: '2026-11-24T00:00:00Z',
+  },
+  {
+    id: 'monetag-direct-12340345-inarticle',
+    name: 'Recommended Knowledge Partner',
+    zoneId: MONETAG_DIRECT_LINK_ZONE_ID,
+    format: 'direct_link',
+    placement: 'in_article',
+    locale: 'all',
+    scriptDomain: 'uplcm.com',
+    directLinkUrl: MONETAG_DIRECT_LINK_URL,
+    enabled: true,
+    createdAt: '2026-11-24T00:00:00Z',
   },
 ];
+
+export function mergeDefaultMonetagAds(firestoreAds: MonetagAdEntry[]): MonetagAdEntry[] {
+  if (!Array.isArray(firestoreAds) || firestoreAds.length === 0) {
+    return DEFAULT_MONETAG_ADS;
+  }
+  const hasDirectLink12340345 = firestoreAds.some(
+    (ad) =>
+      ad.format === 'direct_link' &&
+      (ad.zoneId === MONETAG_DIRECT_LINK_ZONE_ID || ad.directLinkUrl === MONETAG_DIRECT_LINK_URL)
+  );
+  if (hasDirectLink12340345) {
+    return firestoreAds;
+  }
+  return [...firestoreAds, ...DEFAULT_MONETAG_ADS];
+}
 
 export function isSafeBannerDestinationUrl(rawUrl: string): boolean {
   const trimmed = rawUrl.trim();

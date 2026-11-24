@@ -13,7 +13,7 @@ import {
   subscribeGlobalAdSettings,
   subscribePublishedArticles,
 } from './lib/firestoreService';
-import { DEFAULT_GLOBAL_AD_SETTINGS } from './lib/adsStore';
+import { DEFAULT_GLOBAL_AD_SETTINGS, mergeDefaultMonetagAds } from './lib/adsStore';
 import type {
   AdSlotConfig,
   Article,
@@ -92,6 +92,11 @@ function QorviaShell() {
         return delta > 0 ? { ...art, engagementScore: art.engagementScore + delta } : art;
       }),
     [articles, liveScoreDeltas]
+  );
+
+  const effectiveMonetagAds = useMemo(
+    () => mergeDefaultMonetagAds(monetagAds),
+    [monetagAds]
   );
 
   const parsedRoute = useMemo(
@@ -274,7 +279,7 @@ function QorviaShell() {
           articles={articlesWithLiveEngagement}
           categories={categories}
           authors={SEED_AUTHORS}
-          monetagAds={monetagAds}
+          monetagAds={effectiveMonetagAds}
           adSlots={adSlots}
           directBanners={directBanners}
           globalAdSettings={globalAdSettings}
@@ -292,7 +297,7 @@ function QorviaShell() {
           categories={categories}
           articles={articlesWithLiveEngagement}
           authors={SEED_AUTHORS}
-          monetagAds={monetagAds}
+          monetagAds={effectiveMonetagAds}
           adSlots={adSlots}
           directBanners={directBanners}
           globalAdSettings={globalAdSettings}
@@ -321,7 +326,7 @@ function QorviaShell() {
           allArticles={articlesWithLiveEngagement}
           categories={categories}
           authors={SEED_AUTHORS}
-          monetagAds={monetagAds}
+          monetagAds={effectiveMonetagAds}
           adSlots={adSlots}
           directBanners={directBanners}
           globalAdSettings={globalAdSettings}

@@ -267,3 +267,31 @@ export interface AiDraftLocalePayload {
   verificationNotes: string;
 }
 
+export interface AiAutoPostConfig {
+  enabled: boolean;
+  autoPublish: boolean;
+  dailyCount: number;
+  localeTargets: Locale[];
+  lastRunDate: string;
+  lastRunSummary?: string;
+  updatedAt?: string;
+}
+
+export interface AiTrendingTopicSuggestion {
+  title: string;
+  categoryId: CategorySlug;
+  subcategorySlug: string;
+  searchQuery: string;
+  rationale: string;
+  priority: number;
+}
+
+export interface AiSeoOptimizationResult {
+  articleId: string;
+  metaTitle: string;
+  metaDescription: string;
+  tags: string[];
+  imageAlt: string;
+}
+
+

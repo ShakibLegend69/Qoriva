@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import type {
   AdSlotConfig,
+  AiAutoPostConfig,
   AiJobRecord,
   Article,
   Category,
@@ -26,7 +27,8 @@ import type {
   MonetagAdEntry,
   TopicItem,
 } from '../types/qorvia';
-import { SEED_AUTHORS, SEED_CATEGORIES } from '../data/seedCatalog';
+import { SEED_ARTICLES, SEED_AUTHORS, SEED_CATEGORIES } from '../data/seedCatalog';
+import { DEFAULT_AI_AUTO_POST_CONFIG } from '../lib/aiDraftMapper';
 import { DEFAULT_GLOBAL_AD_SETTINGS } from '../lib/adsStore';
 import { useFirebase } from '../contexts/FirebaseContext';
 import {
@@ -40,6 +42,7 @@ import {
   type MediaAssetRecord,
   seedCatalogToFirestore,
   subscribeAdSlots,
+  subscribeAiAutoPostConfig,
   subscribeAiJobs,
   subscribeAllAdCampaigns,
   subscribeAllArticlesForAdmin,
@@ -112,6 +115,9 @@ export function AdminDashboardPage({ onNavigate }: AdminDashboardPageProps) {
   const [mediaAssets, setMediaAssets] = useState<MediaAssetRecord[]>([]);
   const [topics, setTopics] = useState<TopicItem[]>([]);
   const [aiJobs, setAiJobs] = useState<AiJobRecord[]>([]);
+  const [aiAutoPostConfig, setAiAutoPostConfig] = useState<AiAutoPostConfig>(
+    DEFAULT_AI_AUTO_POST_CONFIG
+  );
 
   // Seeding feedback
   const [seedMessage, setSeedMessage] = useState<string | null>(null);
@@ -146,6 +152,7 @@ export function AdminDashboardPage({ onNavigate }: AdminDashboardPageProps) {
     unsubs.push(
       subscribeAiJobs(firebaseUser.uid, userIsBootstrappedAdmin, setAiJobs)
     );
+    unsubs.push(subscribeAiAutoPostConfig(setAiAutoPostConfig));
 
     if (hasAdsPermission) {
       unsubs.push(
@@ -560,10 +567,13 @@ export function AdminDashboardPage({ onNavigate }: AdminDashboardPageProps) {
           firebaseUser={firebaseUser}
           actorUid={firebaseUser.uid}
           actorEmail={firebaseUser.email}
+          articles={articles.length > 0 ? articles : SEED_ARTICLES}
           categories={categories}
           authors={SEED_AUTHORS}
           topics={topics}
           aiJobs={aiJobs}
+          aiAutoPostConfig={aiAutoPostConfig}
+          isSuperAdmin={userIsBootstrappedAdmin}
           hasPublishPermission={hasPublishPermission}
           hasRoleAdminPermission={hasRoleAdminPermission}
           onOpenReviewQueue={() => setActiveTab('review')}
