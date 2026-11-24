@@ -1,0 +1,94 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --qorvia-navy: #101827;
+    --qorvia-paper: #F5F4EF;
+    --qorvia-white: #FFFFFF;
+    --qorvia-blue: #4263EB;
+    --qorvia-emerald: #22A06B;
+    --qorvia-slate: #A5AAB4;
+  }
+
+  html {
+    font-family: 'Manrope', 'Noto Sans Bengali', system-ui, -apple-system, sans-serif;
+    scroll-behavior: smooth;
+  }
+
+  html[lang="bn"] {
+    font-family: 'Noto Sans Bengali', 'Manrope', system-ui, -apple-system, sans-serif;
+  }
+
+  h1, h2, .font-editorial {
+    font-family: 'Fraunces', 'Noto Sans Bengali', Georgia, serif;
+    text-wrap: balance;
+  }
+
+  html[lang="bn"] h1,
+  html[lang="bn"] h2,
+  html[lang="bn"] .font-editorial {
+    font-family: 'Noto Sans Bengali', 'Fraunces', serif;
+  }
+
+  .font-mono-tabular {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Transparent black editorial toggles & buttons (Light & Dark aware) */
+.btn-transparent-black {
+  background-color: rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  color: #101827;
+  backdrop-filter: blur(6px);
+  transition: background-color 180ms cubic-bezier(0.16, 1, 0.3, 1), border-color 180ms cubic-bezier(0.16, 1, 0.3, 1), transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-transparent-black:hover {
+  background-color: rgba(0, 0, 0, 0.12);
+  border-color: rgba(0, 0, 0, 0.28);
+}
+
+.dark .btn-transparent-black {
+  background-color: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #F5F4EF;
+}
+
+.dark .btn-transparent-black:hover {
+  background-color: rgba(0, 0, 0, 0.68);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.btn-transparent-black-solid {
+  background-color: rgba(0, 0, 0, 0.86);
+  border: 1px solid rgba(0, 0, 0, 0.92);
+  color: #FFFFFF;
+  backdrop-filter: blur(6px);
+  transition: background-color 180ms cubic-bezier(0.16, 1, 0.3, 1), transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-transparent-black-solid:hover {
+  background-color: rgba(0, 0, 0, 0.98);
+}
+
+.dark .btn-transparent-black-solid {
+  background-color: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  color: #101827;
+}
+
+.dark .btn-transparent-black-solid:hover {
+  background-color: #FFFFFF;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

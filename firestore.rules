@@ -1,0 +1,466 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedSuperAdmin() {
+      return isSignedIn() && request.auth.token.email == 'sbgangster016@gmail.com';
+    }
+
+    function hasStaffRole(allowedRoles) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isActive == true
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in allowedRoles;
+    }
+
+    function isSuperAdmin() {
+      return isBootstrappedSuperAdmin() || hasStaffRole(['superAdmin']);
+    }
+
+    function isEditorOrAdmin() {
+      return isBootstrappedSuperAdmin() || hasStaffRole(['superAdmin', 'editor']);
+    }
+
+    function isReviewerOrAdmin() {
+      return isBootstrappedSuperAdmin() || hasStaffRole(['superAdmin', 'reviewer']);
+    }
+
+    function isAdsManagerOrAdmin() {
+      return isBootstrappedSuperAdmin() || hasStaffRole(['superAdmin', 'adsManager']);
+    }
+
+    function isStaff() {
+      return isBootstrappedSuperAdmin() || hasStaffRole(['superAdmin', 'editor', 'reviewer', 'adsManager']);
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidUserAccount(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'role', 'isActive', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'role', 'isActive', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.role in ['reader', 'reviewer', 'editor', 'adsManager', 'superAdmin']
+        && data.isActive is bool
+        && data.createdAt is timestamp
+        && (!data.keys().hasAny(['updatedAt']) || data.updatedAt is timestamp);
+    }
+
+    function isValidAuthorProfile(data) {
+      return data.keys().hasAll(['authorId', 'name', 'role', 'bio', 'avatarUrl', 'joinedAt'])
+        && data.keys().hasOnly(['authorId', 'name', 'role', 'bio', 'avatarUrl', 'expertise', 'location', 'joinedAt'])
+        && isValidId(data.authorId)
+        && data.name is map
+        && data.role is map
+        && data.bio is map
+        && data.avatarUrl is string && data.avatarUrl.size() <= 1000
+        && data.joinedAt is string && data.joinedAt.size() <= 64;
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['categoryId', 'slug', 'name', 'isActive'])
+        && data.keys().hasOnly(['categoryId', 'slug', 'name', 'shortName', 'description', 'parentId', 'subcategories', 'isActive', 'updatedAt'])
+        && isValidId(data.categoryId)
+        && data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 128 && data.slug.matches('^[a-z0-9_\\-]+$')
+        && data.name is map
+        && data.isActive is bool
+        && (!data.keys().hasAny(['subcategories']) || (data.subcategories is list && data.subcategories.size() <= 25 && (data.subcategories.size() == 0 || data.subcategories[0] is map)));
+    }
+
+    function isValidArticle(data) {
+      return data.keys().hasAll([
+          'articleId', 'translationGroupId', 'locale', 'title', 'slug',
+          'excerpt', 'contentBlocks', 'categoryId', 'authorId', 'createdByUid',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'articleId', 'translationGroupId', 'locale', 'title', 'slug',
+          'excerpt', 'contentBlocks', 'categoryId', 'subcategorySlug', 'tags',
+          'featuredImage', 'authorId', 'createdByUid', 'status', 'revisionNotes',
+          'scheduledAt', 'isFeatured', 'isRecommended', 'engagementScore',
+          'readingTimeMinutes', 'sources', 'seo', 'publishedAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.articleId)
+        && isValidId(data.translationGroupId)
+        && data.locale in ['en', 'bn']
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 240
+        && data.slug is string && data.slug.size() >= 3 && data.slug.size() <= 180 && data.slug.matches('^[a-z0-9\\-]+$')
+        && data.excerpt is string && data.excerpt.size() >= 10 && data.excerpt.size() <= 600
+        && data.contentBlocks is list && data.contentBlocks.size() <= 80 && (data.contentBlocks.size() == 0 || data.contentBlocks[0] is map)
+        && data.categoryId is string && data.categoryId.size() <= 128 && data.categoryId.matches('^[a-z0-9_\\-]+$')
+        && isValidId(data.authorId)
+        && isValidId(data.createdByUid)
+        && data.status in ['draft', 'pending_review', 'needs_revision', 'rejected', 'scheduled', 'published', 'archived']
+        && (!data.keys().hasAny(['revisionNotes']) || (data.revisionNotes is string && data.revisionNotes.size() <= 1000))
+        && (!data.keys().hasAny(['scheduledAt']) || (data.scheduledAt is string && data.scheduledAt.size() <= 64))
+        && (!data.keys().hasAny(['tags']) || (data.tags is list && data.tags.size() <= 15 && (data.tags.size() == 0 || data.tags[0] is string)))
+        && (!data.keys().hasAny(['sources']) || (data.sources is list && data.sources.size() <= 25 && (data.sources.size() == 0 || data.sources[0] is map)))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTopic(data) {
+      return data.keys().hasAll(['topicId', 'title', 'categoryId', 'status', 'createdByUid', 'createdAt'])
+        && data.keys().hasOnly(['topicId', 'title', 'categoryId', 'priority', 'localeTargets', 'status', 'createdByUid', 'createdAt'])
+        && isValidId(data.topicId)
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 240
+        && data.categoryId is string && data.categoryId.size() <= 128
+        && data.status in ['queued', 'in_progress', 'completed', 'flagged']
+        && (!data.keys().hasAny(['localeTargets']) || (data.localeTargets is list && data.localeTargets.size() <= 5 && (data.localeTargets.size() == 0 || data.localeTargets[0] is string)))
+        && isValidId(data.createdByUid)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSource(data) {
+      return data.keys().hasAll(['sourceId', 'articleId', 'url', 'title', 'publisher', 'accessedAt'])
+        && data.keys().hasOnly(['sourceId', 'articleId', 'url', 'title', 'publisher', 'publishedAt', 'accessedAt'])
+        && isValidId(data.sourceId)
+        && isValidId(data.articleId)
+        && data.url is string && data.url.size() <= 1000
+        && data.title is string && data.title.size() <= 300
+        && data.publisher is string && data.publisher.size() <= 200
+        && data.accessedAt is string && data.accessedAt.size() <= 64;
+    }
+
+    function isValidAiJob(data) {
+      return data.keys().hasAll(['jobId', 'topic', 'categoryId', 'status', 'model', 'createdByUid', 'startedAt'])
+        && data.keys().hasOnly(['jobId', 'topic', 'categoryId', 'status', 'model', 'localeTargets', 'error', 'createdByUid', 'startedAt', 'completedAt'])
+        && isValidId(data.jobId)
+        && data.topic is string && data.topic.size() <= 240
+        && data.categoryId is string && data.categoryId.size() <= 128
+        && data.status in ['pending', 'running', 'completed', 'failed', 'flagged']
+        && data.model is string && data.model.size() <= 100
+        && (!data.keys().hasAny(['localeTargets']) || (data.localeTargets is list && data.localeTargets.size() <= 5 && (data.localeTargets.size() == 0 || data.localeTargets[0] is string)))
+        && isValidId(data.createdByUid)
+        && data.startedAt is timestamp;
+    }
+
+    function isValidAdSlot(data) {
+      return data.keys().hasAll(['slotId', 'name', 'placement', 'provider', 'enabled', 'locale', 'updatedByUid', 'updatedAt'])
+        && data.keys().hasOnly(['slotId', 'name', 'placement', 'provider', 'enabled', 'locale', 'configuration', 'updatedByUid', 'updatedAt'])
+        && isValidId(data.slotId)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 140
+        && data.placement in ['header', 'homepage_content', 'article_top', 'in_article', 'sidebar', 'article_bottom']
+        && data.provider in ['adsense', 'monetag', 'direct_banner']
+        && data.enabled is bool
+        && data.locale in ['en', 'bn', 'all']
+        && isValidId(data.updatedByUid)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdCampaign(data) {
+      return data.keys().hasAll(['campaignId', 'title', 'provider', 'placement', 'enabled', 'locale', 'createdByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'campaignId', 'title', 'provider', 'zoneId', 'format', 'placement',
+          'scriptDomain', 'imageUrl', 'destinationUrl', 'startAt', 'endAt',
+          'enabled', 'locale', 'createdByUid', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.campaignId)
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 140
+        && data.provider in ['monetag', 'direct_banner', 'adsense']
+        && data.placement in ['header', 'homepage_content', 'article_top', 'in_article', 'sidebar', 'article_bottom']
+        && data.enabled is bool
+        && data.locale in ['en', 'bn', 'all']
+        && (!data.keys().hasAny(['zoneId']) || (data.zoneId is string && data.zoneId.size() <= 24 && data.zoneId.matches('^[0-9]{4,12}$')))
+        && (!data.keys().hasAny(['scriptDomain']) || (data.scriptDomain is string && data.scriptDomain.size() <= 120))
+        && (!data.keys().hasAny(['destinationUrl']) || (data.destinationUrl is string && data.destinationUrl.size() <= 1000))
+        && isValidId(data.createdByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSiteSettings(data) {
+      return data.keys().hasAll(['settingId', 'updatedAt'])
+        && data.keys().hasOnly(['settingId', 'brand', 'languages', 'seo', 'aiConfiguration', 'adConfiguration', 'updatedAt'])
+        && data.settingId is string && data.settingId.size() <= 64
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['actorUid', 'action', 'target', 'timestamp'])
+        && data.keys().hasOnly(['actorUid', 'actorEmail', 'action', 'target', 'timestamp', 'metadata'])
+        && isValidId(data.actorUid)
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 100
+        && data.target is string && data.target.size() >= 1 && data.target.size() <= 200
+        && data.timestamp is timestamp;
+    }
+
+    function isValidMediaAsset(data) {
+      return data.keys().hasAll(['mediaId', 'url', 'storagePath', 'alt', 'uploadedByUid', 'createdAt'])
+        && data.keys().hasOnly(['mediaId', 'url', 'storagePath', 'alt', 'title', 'uploadedByUid', 'createdAt'])
+        && isValidId(data.mediaId)
+        && data.url is string && data.url.size() <= 1000
+        && data.storagePath is string && data.storagePath.size() <= 500
+        && data.alt is string && data.alt.size() <= 300
+        && isValidId(data.uploadedByUid)
+        && data.createdAt is timestamp;
+    }
+
+    // 4. Collection Rules
+    match /test/{testId} {
+      allow get: if testId == 'connection';
+    }
+
+    match /users/{uid} {
+      allow get: if isValidId(uid) && isSignedIn() && (request.auth.uid == uid || isSuperAdmin());
+      allow list: if isBootstrappedSuperAdmin();
+
+      allow create: if isValidId(uid)
+        && isSignedIn()
+        && request.auth.uid == uid
+        && isValidUserAccount(incoming())
+        && incoming().uid == uid
+        && incoming().email == request.auth.token.email
+        && incoming().createdAt == request.time
+        && (
+          (isBootstrappedSuperAdmin() && incoming().role == 'superAdmin' && incoming().isActive == true)
+          || (incoming().role == 'reader' && incoming().isActive == true)
+        );
+
+      allow update: if isValidId(uid)
+        && isSignedIn()
+        && isValidUserAccount(incoming())
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (isSuperAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'isActive', 'displayName', 'updatedAt']))
+          || (request.auth.uid == uid && incoming().role == existing().role && incoming().isActive == existing().isActive && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']))
+        );
+
+      allow delete: if isValidId(uid) && isSuperAdmin() && uid != request.auth.uid;
+    }
+
+    match /authors/{authorId} {
+      allow get: if isValidId(authorId);
+      allow list: if true;
+      allow create: if isValidId(authorId)
+        && isEditorOrAdmin()
+        && isValidAuthorProfile(incoming())
+        && incoming().authorId == authorId;
+      allow update: if isValidId(authorId)
+        && isEditorOrAdmin()
+        && isValidAuthorProfile(incoming())
+        && incoming().authorId == existing().authorId
+        && incoming().joinedAt == existing().joinedAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'bio', 'avatarUrl', 'expertise', 'location']);
+      allow delete: if isValidId(authorId) && isSuperAdmin();
+    }
+
+    match /categories/{categoryId} {
+      allow get: if isValidId(categoryId) && (existing().isActive == true || isStaff());
+      allow list: if existing().isActive == true || isBootstrappedSuperAdmin();
+      allow create: if isValidId(categoryId)
+        && isEditorOrAdmin()
+        && isValidCategory(incoming())
+        && incoming().categoryId == categoryId;
+      allow update: if isValidId(categoryId)
+        && isEditorOrAdmin()
+        && isValidCategory(incoming())
+        && incoming().categoryId == existing().categoryId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['slug', 'name', 'shortName', 'description', 'parentId', 'subcategories', 'isActive', 'updatedAt']);
+      allow delete: if isValidId(categoryId) && isSuperAdmin();
+    }
+
+    match /articles/{articleId} {
+      allow get: if isValidId(articleId) && (existing().status == 'published' || isStaff());
+      allow list: if existing().status == 'published' || isBootstrappedSuperAdmin() || (isSignedIn() && existing().createdByUid == request.auth.uid);
+
+      allow create: if isValidId(articleId)
+        && isEditorOrAdmin()
+        && isValidArticle(incoming())
+        && incoming().articleId == articleId
+        && incoming().createdByUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (incoming().status in ['draft', 'pending_review'] || isReviewerOrAdmin());
+
+      allow update: if isValidId(articleId)
+        && isStaff()
+        && isValidArticle(incoming())
+        && incoming().articleId == existing().articleId
+        && incoming().createdByUid == existing().createdByUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (existing().status != 'archived' || isSuperAdmin())
+        && (
+          isSuperAdmin()
+          || (isReviewerOrAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'revisionNotes', 'scheduledAt', 'publishedAt', 'updatedAt', 'title', 'excerpt', 'contentBlocks', 'seo', 'isFeatured', 'isRecommended']))
+          || (isEditorOrAdmin() && incoming().status in ['draft', 'pending_review', 'needs_revision'] && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'slug', 'excerpt', 'contentBlocks', 'categoryId', 'subcategorySlug', 'tags', 'featuredImage', 'sources', 'seo', 'status', 'scheduledAt', 'readingTimeMinutes', 'updatedAt']))
+        );
+
+      allow delete: if isValidId(articleId) && isSuperAdmin();
+    }
+
+    match /topics/{topicId} {
+      allow get: if isValidId(topicId) && isStaff();
+      allow list: if isBootstrappedSuperAdmin() || (isSignedIn() && existing().createdByUid == request.auth.uid);
+      allow create: if isValidId(topicId)
+        && isEditorOrAdmin()
+        && isValidTopic(incoming())
+        && incoming().topicId == topicId
+        && incoming().createdByUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(topicId)
+        && isEditorOrAdmin()
+        && isValidTopic(incoming())
+        && incoming().topicId == existing().topicId
+        && incoming().createdByUid == existing().createdByUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'categoryId', 'priority', 'localeTargets', 'status']);
+      allow delete: if isValidId(topicId) && isSuperAdmin();
+    }
+
+    match /sources/{sourceId} {
+      allow get: if isValidId(sourceId);
+      allow list: if true;
+      allow create: if isValidId(sourceId)
+        && isEditorOrAdmin()
+        && isValidSource(incoming())
+        && incoming().sourceId == sourceId;
+      allow update: if isValidId(sourceId)
+        && isEditorOrAdmin()
+        && isValidSource(incoming())
+        && incoming().sourceId == existing().sourceId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['url', 'title', 'publisher', 'publishedAt', 'accessedAt']);
+      allow delete: if isValidId(sourceId) && isSuperAdmin();
+    }
+
+    match /aiJobs/{jobId} {
+      allow get: if isValidId(jobId) && isStaff();
+      allow list: if isBootstrappedSuperAdmin() || (isSignedIn() && existing().createdByUid == request.auth.uid);
+      allow create: if isValidId(jobId)
+        && isEditorOrAdmin()
+        && isValidAiJob(incoming())
+        && incoming().jobId == jobId
+        && incoming().createdByUid == request.auth.uid
+        && incoming().startedAt == request.time;
+      allow update: if isValidId(jobId)
+        && isEditorOrAdmin()
+        && isValidAiJob(incoming())
+        && incoming().jobId == existing().jobId
+        && incoming().createdByUid == existing().createdByUid
+        && incoming().startedAt == existing().startedAt
+        && (!(existing().status in ['completed', 'failed']) || isSuperAdmin())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'error', 'completedAt']);
+      allow delete: if isValidId(jobId) && isSuperAdmin();
+    }
+
+    match /adSlots/{slotId} {
+      allow get: if isValidId(slotId) && (existing().enabled == true || isAdsManagerOrAdmin());
+      allow list: if existing().enabled == true || isBootstrappedSuperAdmin();
+      allow create: if isValidId(slotId)
+        && isAdsManagerOrAdmin()
+        && isValidAdSlot(incoming())
+        && incoming().slotId == slotId
+        && incoming().updatedByUid == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(slotId)
+        && isAdsManagerOrAdmin()
+        && isValidAdSlot(incoming())
+        && incoming().slotId == existing().slotId
+        && incoming().updatedByUid == request.auth.uid
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'placement', 'provider', 'enabled', 'locale', 'configuration', 'updatedByUid', 'updatedAt']);
+      allow delete: if isValidId(slotId) && isAdsManagerOrAdmin();
+    }
+
+    match /adCampaigns/{campaignId} {
+      allow get: if isValidId(campaignId) && (existing().enabled == true || isAdsManagerOrAdmin());
+      allow list: if existing().enabled == true || isBootstrappedSuperAdmin();
+
+      allow create: if isValidId(campaignId)
+        && isAdsManagerOrAdmin()
+        && isValidAdCampaign(incoming())
+        && incoming().campaignId == campaignId
+        && incoming().createdByUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(campaignId)
+        && isAdsManagerOrAdmin()
+        && isValidAdCampaign(incoming())
+        && incoming().campaignId == existing().campaignId
+        && incoming().createdByUid == existing().createdByUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'provider', 'zoneId', 'format', 'placement',
+          'scriptDomain', 'imageUrl', 'destinationUrl', 'startAt', 'endAt',
+          'enabled', 'locale', 'updatedAt'
+        ]);
+
+      allow delete: if isValidId(campaignId) && isAdsManagerOrAdmin();
+    }
+
+    match /siteSettings/{settingId} {
+      allow get: if isValidId(settingId) && (settingId == 'public' || isSuperAdmin());
+      allow list: if isBootstrappedSuperAdmin();
+      allow create: if isValidId(settingId)
+        && isSuperAdmin()
+        && isValidSiteSettings(incoming())
+        && incoming().settingId == settingId
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(settingId)
+        && isSuperAdmin()
+        && isValidSiteSettings(incoming())
+        && incoming().settingId == existing().settingId
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['brand', 'languages', 'seo', 'aiConfiguration', 'adConfiguration', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /auditLogs/{logId} {
+      allow get: if isValidId(logId) && isSuperAdmin();
+      allow list: if isBootstrappedSuperAdmin();
+      allow create: if isValidId(logId)
+        && isStaff()
+        && isValidAuditLog(incoming())
+        && incoming().actorUid == request.auth.uid
+        && incoming().timestamp == request.time;
+      allow update, delete: if false;
+    }
+
+    match /media/{mediaId} {
+      allow get: if isValidId(mediaId);
+      allow list: if true;
+      allow create: if isValidId(mediaId)
+        && isEditorOrAdmin()
+        && isValidMediaAsset(incoming())
+        && incoming().mediaId == mediaId
+        && incoming().uploadedByUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(mediaId)
+        && isEditorOrAdmin()
+        && isValidMediaAsset(incoming())
+        && incoming().mediaId == existing().mediaId
+        && incoming().uploadedByUid == existing().uploadedByUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['alt', 'title']);
+      allow delete: if isValidId(mediaId) && isEditorOrAdmin();
+    }
+  }
+}

@@ -1,0 +1,343 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Authenticated user account and RBAC role record. Contains PII (email) and must only be read by owner or superAdmin.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "role": {
+          "type": "string",
+          "enum": ["reader", "reviewer", "editor", "adsManager", "superAdmin"]
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "email", "role", "isActive", "createdAt"]
+    },
+    "AuthorProfile": {
+      "title": "AuthorProfile",
+      "description": "Public editorial author biography without private PII.",
+      "type": "object",
+      "properties": {
+        "authorId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": { "type": "object" },
+        "role": { "type": "object" },
+        "bio": { "type": "object" },
+        "avatarUrl": { "type": "string", "maxLength": 1000 },
+        "location": { "type": "object" },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorId", "name", "role", "bio", "avatarUrl", "joinedAt"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Editorial department or subcategory taxonomy item.",
+      "type": "object",
+      "properties": {
+        "categoryId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "slug": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-z0-9_\\-]+$"
+        },
+        "name": { "type": "object" },
+        "shortName": { "type": "object" },
+        "description": { "type": "object" },
+        "parentId": { "type": "string", "maxLength": 128 },
+        "isActive": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["categoryId", "slug", "name", "isActive"]
+    },
+    "Article": {
+      "title": "Article",
+      "description": "Bilingual editorial article linked via translationGroupId.",
+      "type": "object",
+      "properties": {
+        "articleId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "translationGroupId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "locale": { "type": "string", "enum": ["en", "bn"] },
+        "title": { "type": "string", "minLength": 3, "maxLength": 240 },
+        "slug": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 180,
+          "pattern": "^[a-z0-9\\-]+$"
+        },
+        "excerpt": { "type": "string", "minLength": 10, "maxLength": 600 },
+        "contentBlocks": { "type": "array" },
+        "categoryId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-z0-9_\\-]+$"
+        },
+        "subcategorySlug": { "type": "string", "maxLength": 128 },
+        "tags": { "type": "array" },
+        "featuredImage": { "type": "object" },
+        "authorId": { "type": "string", "maxLength": 128 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "pending_review", "needs_revision", "rejected", "scheduled", "published", "archived"]
+        },
+        "revisionNotes": { "type": "string", "maxLength": 1000 },
+        "scheduledAt": { "type": "string", "maxLength": 64 },
+        "isFeatured": { "type": "boolean" },
+        "isRecommended": { "type": "boolean" },
+        "engagementScore": { "type": "number" },
+        "readingTimeMinutes": { "type": "number" },
+        "sources": { "type": "array" },
+        "seo": { "type": "object" },
+        "publishedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "articleId",
+        "translationGroupId",
+        "locale",
+        "title",
+        "slug",
+        "excerpt",
+        "contentBlocks",
+        "categoryId",
+        "authorId",
+        "createdByUid",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Topic": {
+      "title": "Topic",
+      "description": "AI or editorial topic discovery item.",
+      "type": "object",
+      "properties": {
+        "topicId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 240 },
+        "categoryId": { "type": "string", "maxLength": 128 },
+        "priority": { "type": "number" },
+        "localeTargets": { "type": "array" },
+        "status": { "type": "string", "enum": ["queued", "in_progress", "completed", "flagged"] },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["topicId", "title", "categoryId", "status", "createdByUid", "createdAt"]
+    },
+    "Source": {
+      "title": "Source",
+      "description": "Verified citation record linked to an article.",
+      "type": "object",
+      "properties": {
+        "sourceId": { "type": "string", "maxLength": 128 },
+        "articleId": { "type": "string", "maxLength": 128 },
+        "url": { "type": "string", "maxLength": 1000 },
+        "title": { "type": "string", "maxLength": 300 },
+        "publisher": { "type": "string", "maxLength": 200 },
+        "publishedAt": { "type": "string", "maxLength": 64 },
+        "accessedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["sourceId", "articleId", "url", "title", "publisher", "accessedAt"]
+    },
+    "AiJob": {
+      "title": "AiJob",
+      "description": "Gemini daily or manual content generation job log.",
+      "type": "object",
+      "properties": {
+        "jobId": { "type": "string", "maxLength": 128 },
+        "topic": { "type": "string", "maxLength": 240 },
+        "categoryId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["pending", "running", "completed", "failed", "flagged"] },
+        "model": { "type": "string", "maxLength": 100 },
+        "localeTargets": { "type": "array" },
+        "error": { "type": "string", "maxLength": 1000 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["jobId", "topic", "categoryId", "status", "model", "createdByUid", "startedAt"]
+    },
+    "AdSlot": {
+      "title": "AdSlot",
+      "description": "Controlled advertisement placement configuration (AdSense, Monetag, Direct Banner).",
+      "type": "object",
+      "properties": {
+        "slotId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "placement": {
+          "type": "string",
+          "enum": ["header", "homepage_content", "article_top", "in_article", "sidebar", "article_bottom"]
+        },
+        "provider": { "type": "string", "enum": ["adsense", "monetag", "direct_banner"] },
+        "enabled": { "type": "boolean" },
+        "locale": { "type": "string", "enum": ["en", "bn", "all"] },
+        "configuration": { "type": "object" },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["slotId", "name", "placement", "provider", "enabled", "locale", "updatedByUid", "updatedAt"]
+    },
+    "AdCampaign": {
+      "title": "AdCampaign",
+      "description": "Scheduled Monetag or direct sponsored banner campaign.",
+      "type": "object",
+      "properties": {
+        "campaignId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "provider": { "type": "string", "enum": ["monetag", "direct_banner", "adsense"] },
+        "zoneId": { "type": "string", "maxLength": 24 },
+        "format": { "type": "string", "maxLength": 40 },
+        "placement": {
+          "type": "string",
+          "enum": ["header", "homepage_content", "article_top", "in_article", "sidebar", "article_bottom"]
+        },
+        "scriptDomain": { "type": "string", "maxLength": 120 },
+        "imageUrl": { "type": "string", "maxLength": 1000 },
+        "destinationUrl": { "type": "string", "maxLength": 1000 },
+        "startAt": { "type": "string", "format": "date-time" },
+        "endAt": { "type": "string", "format": "date-time" },
+        "enabled": { "type": "boolean" },
+        "locale": { "type": "string", "enum": ["en", "bn", "all"] },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["campaignId", "title", "provider", "placement", "enabled", "locale", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "SiteSettings": {
+      "title": "SiteSettings",
+      "description": "Brand, language, SEO, AI, and Ad configuration settings.",
+      "type": "object",
+      "properties": {
+        "settingId": { "type": "string", "maxLength": 64 },
+        "brand": { "type": "object" },
+        "languages": { "type": "object" },
+        "seo": { "type": "object" },
+        "aiConfiguration": { "type": "object" },
+        "adConfiguration": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["settingId", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable admin action audit trail.",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "actorEmail": { "type": "string", "maxLength": 254 },
+        "action": { "type": "string", "maxLength": 100 },
+        "target": { "type": "string", "maxLength": 200 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["actorUid", "action", "target", "timestamp"]
+    },
+    "MediaAsset": {
+      "title": "MediaAsset",
+      "description": "Uploaded Firebase Storage media metadata.",
+      "type": "object",
+      "properties": {
+        "mediaId": { "type": "string", "maxLength": 128 },
+        "url": { "type": "string", "maxLength": 1000 },
+        "storagePath": { "type": "string", "maxLength": 500 },
+        "alt": { "type": "string", "maxLength": 300 },
+        "title": { "type": "string", "maxLength": 200 },
+        "uploadedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["mediaId", "url", "storagePath", "alt", "uploadedByUid", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "User accounts and RBAC roles (PII restricted to owner and superAdmin)"
+    },
+    "/authors/{authorId}": {
+      "schema": { "$ref": "#/entities/AuthorProfile" },
+      "description": "Public editorial author biographies"
+    },
+    "/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/Category" },
+      "description": "Editorial departments and subcategories"
+    },
+    "/articles/{articleId}": {
+      "schema": { "$ref": "#/entities/Article" },
+      "description": "Bilingual English and Bengali articles"
+    },
+    "/topics/{topicId}": {
+      "schema": { "$ref": "#/entities/Topic" },
+      "description": "Discovered editorial and AI topics"
+    },
+    "/sources/{sourceId}": {
+      "schema": { "$ref": "#/entities/Source" },
+      "description": "Verified citation references"
+    },
+    "/aiJobs/{jobId}": {
+      "schema": { "$ref": "#/entities/AiJob" },
+      "description": "Gemini AI content generation job logs"
+    },
+    "/adSlots/{slotId}": {
+      "schema": { "$ref": "#/entities/AdSlot" },
+      "description": "Controlled public advertisement placement configurations"
+    },
+    "/adCampaigns/{campaignId}": {
+      "schema": { "$ref": "#/entities/AdCampaign" },
+      "description": "Monetag and direct sponsored banner campaigns"
+    },
+    "/siteSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/SiteSettings" },
+      "description": "Platform brand, SEO, AI, and ad settings"
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Append-only admin audit log entries"
+    },
+    "/media/{mediaId}": {
+      "schema": { "$ref": "#/entities/MediaAsset" },
+      "description": "Media library metadata backed by Firebase Storage"
+    }
+  }
+}

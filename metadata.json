@@ -1,0 +1,6 @@
+{
+  "name": "QORVIA — Global Knowledge & Information Platform",
+  "description": "Discover More. Understand Better. A bilingual English and Bengali editorial knowledge platform covering Technology & AI, Education & Learning, Digital Skills, and General Knowledge.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

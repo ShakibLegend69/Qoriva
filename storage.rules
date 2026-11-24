@@ -1,0 +1,44 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedSuperAdmin() {
+      return isSignedIn() && request.auth.token.email == 'sbgangster016@gmail.com';
+    }
+
+    function isStaff() {
+      return isBootstrappedSuperAdmin() || (
+        isSignedIn() &&
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.isActive == true &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['superAdmin', 'editor', 'reviewer', 'adsManager']
+      );
+    }
+
+    match /media/{allPaths=**} {
+      allow read: if true;
+      allow write: if isStaff()
+        && request.resource != null
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp|avif|gif)');
+      allow delete: if isStaff();
+    }
+
+    match /ad-banners/{allPaths=**} {
+      allow read: if true;
+      allow write: if isStaff()
+        && request.resource != null
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp|avif|gif)');
+      allow delete: if isStaff();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
