@@ -2,7 +2,23 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
-import firebaseConfig from '../../firebase-applet-config.json';
+import defaultFirebaseConfig from '../../firebase-applet-config.json';
+
+const firebaseConfig = {
+  ...defaultFirebaseConfig,
+  ...(import.meta.env.VITE_FIREBASE_API_KEY
+    ? { apiKey: String(import.meta.env.VITE_FIREBASE_API_KEY).trim() }
+    : {}),
+  ...(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN
+    ? { authDomain: String(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN).trim() }
+    : {}),
+  ...(import.meta.env.VITE_FIREBASE_PROJECT_ID
+    ? { projectId: String(import.meta.env.VITE_FIREBASE_PROJECT_ID).trim() }
+    : {}),
+  ...(import.meta.env.VITE_FIREBASE_APP_ID
+    ? { appId: String(import.meta.env.VITE_FIREBASE_APP_ID).trim() }
+    : {}),
+};
 
 const app = initializeApp(firebaseConfig);
 

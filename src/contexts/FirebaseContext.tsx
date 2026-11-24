@@ -22,6 +22,7 @@ import {
   canPublishArticles,
 } from '../lib/rbac';
 import { type FirestoreUserRecord, syncUserAccount } from '../lib/firestoreService';
+import { formatFirebaseAuthError } from '../lib/authErrors';
 
 interface FirebaseContextValue {
   firebaseUser: User | null;
@@ -79,8 +80,8 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Google Sign-In failed.';
-      setAuthError(msg);
+      const hostname = typeof window !== 'undefined' ? window.location.hostname : undefined;
+      setAuthError(formatFirebaseAuthError(err, hostname));
     }
   }, []);
 
